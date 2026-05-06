@@ -1,3 +1,5 @@
+import re
+import urllib.parse
 from unittest.mock import MagicMock, patch
 
 import frappe
@@ -247,3 +249,58 @@ class TestEndpointUrl(FrappeTestCase):
 
 		_, kwargs = controller.boto3.client.call_args
 		self.assertNotIn("endpoint_url", kwargs)
+
+
+class TestNonAsciiFilenames(FrappeTestCase):
+	def setUp(self):
+		super().setUp()
+		self.settings = _make_settings()
+		self.mock_s3_client = MagicMock()
+		self.mock_s3_client.meta.endpoint_url = "https://s3.local"
+		self.patch_get_doc = patch(
+			"frappe_s3_attachment.controller.frappe.get_doc",
+			return_value=self.settings,
+		)
+		self.patch_boto3_client = patch(
+			"frappe_s3_attachment.controller.boto3.client",
+			return_value=self.mock_s3_client,
+		)
+		self.patch_hooks = patch(
+			"frappe_s3_attachment.controller.frappe.get_hooks",
+			return_value={},
+		)
+		self.patch_get_doc.start()
+		self.patch_boto3_client.start()
+		self.patch_hooks.start()
+		self.addCleanup(self.patch_get_doc.stop)
+		self.addCleanup(self.patch_boto3_client.stop)
+		self.addCleanup(self.patch_hooks.stop)
+
+	def test_metadata_filename_is_ascii(self):
+		with patch("frappe_s3_attachment.controller.magic.from_file", return_value="application/pdf"):
+			s3 = controller.S3Operations()
+			s3.upload_files_to_s3_with_key(
+				"/tmp/Pflanzenrückgabe.pdf",
+				"Pflanzenrückgabe.pdf",
+				1,
+				"Sales Invoice",
+				"SINV-0001",
+			)
+
+		meta_name = self.mock_s3_client.upload_file.call_args.kwargs["ExtraArgs"]["Metadata"]["file_name"]
+		self.assertIsNotNone(re.fullmatch(r"[\x00-\x7f]+", meta_name))
+		self.assertEqual(meta_name, "Pflanzenruckgabe.pdf")
+
+	def test_content_disposition_rfc5987(self):
+		self.mock_s3_client.generate_presigned_url.return_value = "https://signed.example/presigned"
+		s3 = controller.S3Operations()
+		s3.get_url("2026/05/06/Sales Invoice/AB12CD34_Pflanzenrückgabe.pdf", "Pflanzenrückgabe.pdf")
+
+		params = self.mock_s3_client.generate_presigned_url.call_args.kwargs["Params"]
+		disposition = params["ResponseContentDisposition"]
+		self.assertRegex(
+			disposition,
+			r"^attachment; filename\*=UTF-8''.+$",
+		)
+		encoded = disposition.split("''", 1)[1]
+		self.assertEqual(urllib.parse.unquote(encoded), "Pflanzenrückgabe.pdf")
