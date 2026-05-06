@@ -1,11 +1,59 @@
-[tool.bench.frappe-dependencies]
-frappe = ">=10.0.0,<17.0.0"
-
+[project]
+name = "frappe_s3_attachment"
+authors = [
+    { name = "ALYF GmbH", email = "hallo@alyf.de" },
+]
+description = "Frappe app to make file upload automatically upload and read from S3"
+requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "MIT" }
+dynamic = ["version"]
 dependencies = [
-	"python-magic==0.4.18",
+    "python-magic==0.4.18",
     "boto3>=1.34.0",
     "botocore>=1.34.0",
     "s3transfer>=0.10.0",
     "six>=1.16.0",
-    "urllib3<2.0.0"
 ]
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.bench.frappe-dependencies]
+frappe = ">=15.0.0,<17.0.0"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "F",
+    "E",
+    "W",
+    "I",
+    "UP",
+    "B",
+]
+ignore = [
+    "B017", # assertRaises(Exception) - should be more specific
+    "B018", # useless expression, not assigned to anything
+    "B023", # function doesn't bind loop variable - will have last iteration's value
+    "B904", # raise inside except without from
+    "E101", # indentation contains mixed spaces and tabs
+    "E402", # module level import not at top of file
+    "E501", # line too long
+    "E741", # ambiguous variable name
+    "F401", # "unused" imports
+    "F403", # can't detect undefined names from * import
+    "F405", # can't detect undefined names from * import
+    "F722", # syntax error in forward type annotation
+    "W191", # indentation contains tabs
+]
+typing-modules = ["frappe.types.DF"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "tab"
+docstring-code-format = true
