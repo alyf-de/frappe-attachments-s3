@@ -14,25 +14,28 @@ from botocore.exceptions import ClientError
 class S3Operations:
 	def __init__(self):
 		"""
-		Function to initialise the aws settings from frappe S3 File attachment
-		doctype.
+		Function to initialise the S3 client from the S3 File Attachment singleton.
 		"""
 		self.s3_settings_doc = frappe.get_doc(
 			"S3 File Attachment",
 			"S3 File Attachment",
 		)
-		if self.s3_settings_doc.aws_key and self.s3_settings_doc.aws_secret:
-			self.S3_CLIENT = boto3.client(
-				"s3",
-				aws_access_key_id=self.s3_settings_doc.aws_key,
-				aws_secret_access_key=self.s3_settings_doc.aws_secret,
-				region_name=self.s3_settings_doc.region_name,
-				config=Config(signature_version="s3v4"),
-			)
-		else:
-			self.S3_CLIENT = boto3.client(
-				"s3", region_name=self.s3_settings_doc.region_name, config=Config(signature_version="s3v4")
-			)
+		client_kwargs = dict(
+			region_name=self.s3_settings_doc.region_name,
+			config=Config(signature_version="s3v4"),
+		)
+		# default to AWS S3 if no endpoint url is set
+		if self.s3_settings_doc.endpoint_url:
+			client_kwargs["endpoint_url"] = self.s3_settings_doc.endpoint_url
+
+		# use credentials from the S3 File Attachment singleton, if available
+		# otherwise fall back to boto3 default credential resolution
+		secret = self.s3_settings_doc.get_password("secret_key")
+		if self.s3_settings_doc.access_key and secret:
+			client_kwargs["aws_access_key_id"] = self.s3_settings_doc.access_key
+			client_kwargs["aws_secret_access_key"] = secret
+
+		self.S3_CLIENT = boto3.client("s3", **client_kwargs)
 		self.BUCKET = self.s3_settings_doc.bucket_name
 		self.folder_name = self.s3_settings_doc.folder_name
 

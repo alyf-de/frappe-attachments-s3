@@ -1,4 +1,3 @@
-import re
 from unittest.mock import MagicMock, patch
 
 import frappe
@@ -8,18 +7,25 @@ from frappe_s3_attachment import controller
 
 
 def _make_settings(**overrides):
-	settings = frappe._dict(
-		{
-			"aws_key": "",
-			"aws_secret": "",
-			"region_name": "fsn1",
-			"bucket_name": "test-bucket",
-			"folder_name": "",
-			"signed_url_expiry_time": 300,
-			"delete_file_from_cloud": 0,
-		}
-	)
-	settings.update(overrides)
+	secret_password = overrides.pop("_secret_password", "")
+	merged = {
+		"access_key": "",
+		"endpoint_url": "",
+		"region_name": "fsn1",
+		"bucket_name": "test-bucket",
+		"folder_name": "",
+		"signed_url_expiry_time": 300,
+		"delete_file_from_cloud": 0,
+	}
+	merged.update({k: v for k, v in overrides.items() if k != "_secret_password"})
+	settings = frappe._dict(merged)
+
+	def get_password(fieldname):
+		if fieldname == "secret_key":
+			return secret_password
+		return ""
+
+	settings.get_password = get_password
 	return settings
 
 
@@ -205,3 +211,39 @@ class TestControllerCharacterization(FrappeTestCase):
 			)
 		)
 		self.assertIsNone(controller.s3_file_regex_match("/files/plain-local-file.pdf"))
+
+
+class TestEndpointUrl(FrappeTestCase):
+	def setUp(self):
+		super().setUp()
+		self.settings = _make_settings()
+		self.mock_s3_client = MagicMock()
+		self.mock_s3_client.meta.endpoint_url = "https://s3.local"
+		self.patch_get_doc = patch(
+			"frappe_s3_attachment.controller.frappe.get_doc",
+			return_value=self.settings,
+		)
+		self.patch_boto3_client = patch(
+			"frappe_s3_attachment.controller.boto3.client",
+			return_value=self.mock_s3_client,
+		)
+		self.patch_get_doc.start()
+		self.patch_boto3_client.start()
+		self.addCleanup(self.patch_get_doc.stop)
+		self.addCleanup(self.patch_boto3_client.stop)
+
+	def test_endpoint_url_threaded_when_set(self):
+		self.settings.endpoint_url = "https://fsn1.your-objectstorage.com"
+
+		controller.S3Operations()
+
+		_, kwargs = controller.boto3.client.call_args
+		self.assertEqual(kwargs.get("endpoint_url"), "https://fsn1.your-objectstorage.com")
+
+	def test_endpoint_url_omitted_when_blank(self):
+		self.settings.endpoint_url = ""
+
+		controller.S3Operations()
+
+		_, kwargs = controller.boto3.client.call_args
+		self.assertNotIn("endpoint_url", kwargs)
