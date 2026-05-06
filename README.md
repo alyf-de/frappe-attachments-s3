@@ -9,7 +9,7 @@ Frappe app to make file upload automatically upload and read from s3.
 1. Upload both public and private files to s3.
 2. Stream files from S3, when file is viewed everytime.
 3. Lets you add S3 credentials
-    (aws key, aws secret, bucket name, folder name) through ui and migrate existing
+    (access key, secret key, bucket name, folder name, optional endpoint URL) through ui and migrate existing
     files.
 4. Deletes from s3 whenever a file is deleted in ui.
 5. Files are uploaded categorically in the format.
@@ -36,7 +36,7 @@ Frappe app to make file upload automatically upload and read from s3.
 #### Configuration Setup.
 
 1. Open single doctype "s3 File Attachment"
-2. Enter (Bucket Name, AWS key, AWS secret, S3 bucket Region name, Folder Name)
+2. Enter bucket name, access key, secret key, region, optional S3 endpoint URL, and folder name
     Folder Name- folder name is the default folder path in s3.
 3. Migrate existing files lets all the existing files in private and public folders
     to be migrated to s3.
