@@ -17,8 +17,21 @@ Frappe app to make file upload automatically upload and read from s3.
 
 #### Installation.
 
-1. bench get-app https://github.com/zerodhatech/Frappe-attachments-s3.git
+1. bench get-app https://github.com/alyf-de/frappe-attachments-s3 --branch version-15
 2. bench install-app frappe_s3_attachment
+
+#### Branches.
+
+- `develop`: default development branch.
+- `version-15`: stable branch for Frappe v15 installations.
+
+#### Changes vs upstream.
+
+- Fork base branch: `upstream/develop`.
+- ALYF CI baseline commit: `2274ea1` (`chore(ci): adopt ALYF baseline configuration`).
+- One-time formatting anchor commit: `b595155` (`chore: apply ruff format and lint to upstream baseline`).
+- Use the formatting anchor to review semantic deltas cleanly:
+  `git diff b595155..HEAD -- <path>`
 
 #### Configuration Setup.
 
