@@ -227,17 +227,24 @@ def file_upload_to_s3(doc, method):
 
 
 @frappe.whitelist()
-def generate_file(key=None, file_name=None):
+def generate_file(key: str | None = None, file_name: str | None = None):
 	"""
 	Function to stream file from s3.
 	"""
-	if key:
-		s3_upload = S3Operations()
-		signed_url = s3_upload.get_url(key, file_name)
-		frappe.local.response["type"] = "redirect"
-		frappe.local.response["location"] = signed_url
-	else:
+	if not key:
 		frappe.local.response["body"] = "Key not found."
+		return
+
+	file_name_in_db = frappe.db.get_value("File", {"content_hash": key}, "name")
+	if not file_name_in_db:
+		raise frappe.DoesNotExistError(doctype="File")
+
+	frappe.get_doc("File", file_name_in_db).check_permission("read")
+
+	s3_upload = S3Operations()
+	signed_url = s3_upload.get_url(key, file_name)
+	frappe.local.response["type"] = "redirect"
+	frappe.local.response["location"] = signed_url
 	return
 
 

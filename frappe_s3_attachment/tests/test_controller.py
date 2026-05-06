@@ -7,6 +7,8 @@ from frappe.tests.utils import FrappeTestCase
 
 from frappe_s3_attachment import controller
 
+_REAL_FRAPPE_GET_DOC = frappe.get_doc
+
 
 def _make_settings(**overrides):
 	secret_password = overrides.pop("_secret_password", "")
@@ -304,3 +306,85 @@ class TestNonAsciiFilenames(FrappeTestCase):
 		)
 		encoded = disposition.split("''", 1)[1]
 		self.assertEqual(urllib.parse.unquote(encoded), "Pflanzenrückgabe.pdf")
+
+
+_PERM_TEST_USER = "s3_attach_perm_test@test.local"
+
+
+class TestGenerateFilePermissions(FrappeTestCase):
+	"""Gate generate_file behind File read permission (content_hash → File row)."""
+
+	def setUp(self):
+		super().setUp()
+		self.settings = _make_settings()
+		self.mock_s3_client = MagicMock()
+		self.mock_s3_client.meta.endpoint_url = "https://s3.local"
+		self.mock_s3_client.generate_presigned_url.return_value = "https://signed.example/presigned"
+		self.patch_boto3_client = patch(
+			"frappe_s3_attachment.controller.boto3.client",
+			return_value=self.mock_s3_client,
+		)
+		self.patch_boto3_client.start()
+		self.addCleanup(self.patch_boto3_client.stop)
+		# Inserting File runs after_insert hook → file_upload_to_s3 / real S3 settings; not under test here.
+		self.patch_skip_upload_hook = patch("frappe_s3_attachment.controller.file_upload_to_s3")
+		self.patch_skip_upload_hook.start()
+		self.addCleanup(self.patch_skip_upload_hook.stop)
+
+	def _selective_get_doc(self, *args, **kwargs):
+		if args and args[0] == "S3 File Attachment":
+			return self.settings
+		return _REAL_FRAPPE_GET_DOC(*args, **kwargs)
+
+	def _ensure_perm_test_user(self):
+		if not frappe.db.exists("User", _PERM_TEST_USER):
+			u = frappe.new_doc("User")
+			u.email = _PERM_TEST_USER
+			u.first_name = "S3 Perm"
+			u.send_welcome_email = 0
+			u.insert()
+			u.add_roles("Desk User")
+
+	def test_generate_file_denies_unauthorized_user(self):
+		frappe.set_user("Administrator")
+		f = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": "secret.txt",
+				"content": "x",
+				"is_private": 1,
+			}
+		).insert()
+		frappe.db.set_value("File", f.name, "content_hash", "deny-key-perm-test")
+		self._ensure_perm_test_user()
+		frappe.set_user(_PERM_TEST_USER)
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
+			with self.assertRaises(frappe.PermissionError):
+				controller.generate_file(key="deny-key-perm-test", file_name="secret.txt")
+
+	def test_generate_file_redirects_when_authorized(self):
+		self._ensure_perm_test_user()
+		frappe.set_user("Administrator")
+		f = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": "mine.txt",
+				"content": "y",
+				"is_private": 1,
+			}
+		).insert()
+		frappe.db.set_value("File", f.name, {"content_hash": "ok-key-perm-test", "owner": _PERM_TEST_USER})
+
+		frappe.set_user(_PERM_TEST_USER)
+		frappe.local.response = frappe._dict()
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
+			controller.generate_file(key="ok-key-perm-test", file_name="mine.txt")
+
+		self.assertEqual(frappe.local.response["type"], "redirect")
+		self.assertEqual(frappe.local.response["location"], "https://signed.example/presigned")
+
+	def test_generate_file_missing_key_raises_does_not_exist(self):
+		frappe.set_user("Administrator")
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
+			with self.assertRaises(frappe.DoesNotExistError):
+				controller.generate_file(key="no-such-file-row-key-zzz")
