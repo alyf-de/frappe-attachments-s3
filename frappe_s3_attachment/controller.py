@@ -227,7 +227,7 @@ def file_upload_to_s3(doc, method):
 
 
 @frappe.whitelist()
-def generate_file(key=None, file_name=None):
+def generate_file(key: str | None = None, file_name: str | None = None):
 	"""
 	Function to stream file from s3.
 	"""
