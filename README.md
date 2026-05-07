@@ -3,23 +3,29 @@
 Frappe app to make file upload automatically upload and read from S3.  
 Maintained as a fork of [zerodha/frappe-attachments-s3](https://github.com/zerodha/frappe-attachments-s3) under [alyf-de/frappe-attachments-s3](https://github.com/alyf-de/frappe-attachments-s3).
 
+The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, characterization and TDD tests, and tagged release **v0.1.0**. Optional next steps include MinIO-backed integration tests, a consolidated **v16** forward-compatibility pass, and further hardening—not required for normal installs.
+
 #### Features
 
 1. Upload both public and private files to S3.
 2. Stream files from S3 when a file is viewed (private files use a time-limited signed URL).
-3. Configure S3 credentials (access key, secret key, bucket name, folder name, optional endpoint URL) from Desk and migrate existing files.
-4. Delete objects in S3 when the **File** document is removed in Desk (when enabled).
-5. Files are stored under `{s3_folder_path}/{year}/{month}/{day}/{doctype}/{random}_{filename}` (see **S3 File Attachment** _Folder Name_).
+3. Configure credentials and bucket settings from Desk (**S3 File Attachment** singleton): _Bucket Name_, _Access Key_, _Secret Key_ (stored as **Password**), _S3 Bucket Region Name_, optional _Endpoint URL_ for S3-compatible providers, _Folder Name_, and migration of existing files.
+4. Delete objects in S3 when the **File** document is removed in Desk when _Delete file from cloud_ is enabled.
+5. Files are stored under `{folder}/{year}/{month}/{day}/{doctype}/{random}_{filename}` (see _Folder Name_).
+6. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** remains skipped by default.
 
 #### Installation
 
 1. `bench get-app https://github.com/alyf-de/frappe-attachments-s3 --branch version-15`
 2. `bench install-app frappe_s3_attachment`
 
+To pin an exact revision, checkout tag [`v0.1.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.1.0) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
+
 #### Branches
 
-- `develop`: default development branch.
-- `version-15`: stable branch for Frappe v15 installations.
+- `develop`: default branch; upstream rebases and feature work land here first.
+- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.1.0**).
+- `version-16`: to be created at v16 cutover.
 
 #### Changes vs upstream
 
@@ -27,10 +33,13 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 
 | Topic | Upstream behaviour | This fork |
 | ----- | ------------------ | --------- |
-| **S3-compatible endpoint** | Uses default AWS endpoints only. | **S3 File Attachment** includes _Endpoint URL_; when set, it is passed to `boto3.client(..., endpoint_url=...)` so buckets on providers such as Hetzner Object Storage work without code changes. |
+| **S3-compatible endpoint** | Uses default AWS endpoints only. | **S3 File Attachment** includes an endpoint URL field; when set, it is passed to `boto3.client(..., endpoint_url=...)` with **path-style** addressing so providers such as **Hetzner Object Storage** work reliably. |
 | **Non-ASCII filenames** | Raw names in S3 metadata / content-disposition can break uploads or downloads for some characters. | Metadata `file_name` is ASCII-normalized; presigned `get_object` responses use RFC 5987 `filename*` for `ResponseContentDisposition` so original Unicode names round-trip in browsers. |
 | **`generate_file` (signed URL)** | Any authenticated caller could request a presigned URL if they knew or guessed the object key (key stored in **File** `content_hash`). | Resolves the **File** row by `content_hash`, runs **`check_permission('read')`** on that **File**, then redirects; missing row raises **Does Not Exist** (404). |
-| **Quality / CI** | Minimal upstream tooling. | Ruff, pre-commit, Semgrep (frappe rules), GitHub Actions (commitlint, linter workflow). |
+| **Ignored DocTypes** | Effectively a fixed skip list (e.g. **Data Import**). | Child table **S3 Ignored DocType Row** on the singleton to add more parent DocTypes; **Data Import** is still always ignored. |
+| **Upload hook exposure** | `file_upload_to_s3` was whitelisted like other helpers. | Hook is **not** whitelisted; only intentional API entry points (e.g. `generate_file`, `migrate_existing_files`) remain exposed. |
+| **Credentials** | Typical upstream installs used plain **Data** for secrets. | _Secret Key_ uses **Password**; reads use `get_password`. |
+| **Quality / CI** | Minimal upstream tooling. | Ruff, pre-commit, Semgrep (Frappe rules), commitlint, GitHub Actions server tests (`bench run-tests` with MariaDB/Redis), vulnerable-dependency check (`pip-audit`), CodeQL, Dependabot. |
 
 **Git anchors** (rebases and whitespace-heavy diffs):
 
@@ -41,25 +50,29 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 git diff b595155..HEAD -- path/to/file.py
 ```
 
-**Current release**: `v0.1.0`
+**Current release**: [`v0.1.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.1.0) — see [CHANGELOG.md](CHANGELOG.md).
 
 #### Known limitations
 
-These match upstream unless noted; they are candidates for follow-up hardening, not regressions introduced only in this fork:
+These match upstream unless noted; further hardening is tracked as follow-up work, not regressions introduced only in this fork:
 
-- **S3 File Attachment** credential fields are still plain **Data** fields in the stock DocType; prefer tightening secret handling in a dedicated change.
-- **`file_upload_to_s3`** remains whitelisted like upstream; it is intended as a document hook, not a public API.
-- **`content_hash`** stores the S3 object key for uploaded files, which can interact with core **File** validation and future Frappe versions; plan a dedicated field or migration if you rely on strict content-hash semantics.
+- **`content_hash`** stores the S3 object key for uploaded files, which can interact with core **File** validation and future Frappe versions; plan a dedicated field or migration if you rely on strict content-hash semantics (see upstream discussions around **File** and remote storage).
 
-#### Configuration Setup
+Optional automation backlog: MinIO integration tests in CI, v16 compatibility audit (`python-magic` → `filetype`, test base classes, **File** `content_hash` semantics, explicit **boto3** pin).
 
-1. Open single doctype "S3 File Attachment"
-2. Enter bucket name, access key, secret key, region, optional S3 endpoint URL, and folder name
-    Folder Name- folder name is the default folder path in s3.
-3. Migrate existing files lets all the existing files in private and public folders
-    to be migrated to S3.
-4. Delete From Cloud when selected deletes the file form S3 bucket whenever a file
-    is deleted from ui. By default the Delete from cloud will be unchecked.
+#### Hetzner Object Storage
+
+1. Create a bucket and access keys in your Hetzner Cloud project.
+2. In **S3 File Attachment**, set _Endpoint URL_ to `https://<location>.your-objectstorage.com` (for example `fsn1`, `nbg1`, or `hel1`).
+3. Set _S3 Bucket Region Name_ to the corresponding region/location code you use with Hetzner.
+4. **Public** attachments rely on per-object `ACL: public-read` (existing upstream behaviour). Ensure your project allows object ACLs for public reads if you need **Public** files; bucket policy alone may not be enough.
+
+#### Desk configuration
+
+1. Open the **S3 File Attachment** single.
+2. Enter _Bucket Name_, _Access Key_, _Secret Key_, _S3 Bucket Region Name_, optional _Endpoint URL_, and _Folder Name_ as needed. _Folder Name_ is the default prefix inside the bucket for generated keys.
+3. Use _Migrate Existing Files_ to upload files that still live under `sites/<site>/public` and `private` folders into the bucket.
+4. Enable _Delete file from cloud_ if removed **File** rows should delete the corresponding S3 object.
 
 #### License
 
