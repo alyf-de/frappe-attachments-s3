@@ -17,6 +17,8 @@
   "folder_name",
   "region_name",
   "endpoint_url",
+  "ignored_doctypes_section",
+  "ignored_doctypes",
   "section_break_10",
   "migrate_existing_files"
  ],
@@ -82,7 +84,7 @@
    "label": "Access Key"
   },
   {
-   "description": "Leave blank for AWS. For Hetzner set for example: <b>https://fsn1.your-objectstorage.com</b>.",
+   "description": "Leave blank for AWS. For Hetzner set for example: <b>https://nbg1.your-objectstorage.com</b>.",
    "fieldname": "endpoint_url",
    "fieldtype": "Data",
    "label": "S3 Endoint URL"
@@ -97,11 +99,23 @@
    "fieldname": "credentials_section",
    "fieldtype": "Section Break",
    "label": "S3 API Credentials"
+  },
+  {
+   "bold": 1,
+   "fieldname": "ignored_doctypes_section",
+   "fieldtype": "Section Break",
+   "label": "Ignored DocTypes"
+  },
+  {
+   "description": "Exclude these DocTypes from the automatic S3 upload and store them locally.",
+   "fieldname": "ignored_doctypes",
+   "fieldtype": "Table",
+   "options": "S3 Ignored DocType Row"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-05-07 11:50:54.189934",
+ "modified": "2026-05-07 12:28:07.385847",
  "modified_by": "Administrator",
  "module": "Frappe S3 Attachment",
  "name": "S3 File Attachment",
