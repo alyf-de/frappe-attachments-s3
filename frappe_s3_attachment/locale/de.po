@@ -5,9 +5,9 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: frappe_s3_attachment\n"
+"Project-Id-Version:  frappe_s3_attachment\n"
 "Report-Msgid-Bugs-To: hallo@alyf.de\n"
-"POT-Creation-Date: 2026-05-07 13:00+0200\n"
+"POT-Creation-Date: 2026-05-07 14:59+0053\n"
 "PO-Revision-Date: 2026-05-07 13:05+0200\n"
 "Last-Translator: ALYF GmbH <hallo@alyf.de>\n"
 "Language: de\n"
@@ -24,7 +24,7 @@ msgstr ""
 msgid "Access Key"
 msgstr "Zugriffsschlüssel (Access Key)"
 
-#: frappe_s3_attachment/controller.py:160
+#: frappe_s3_attachment/controller.py:163
 msgid "Access denied: Could not delete file"
 msgstr "Zugriff verweigert: Datei konnte nicht gelöscht werden"
 
@@ -50,10 +50,10 @@ msgstr "Geben Sie bitte eine gültige HTTPS-URL in {0} ein, zum Beispiel: {1}."
 #. Description of the 'ignored_doctypes' (Table) field in DocType 'S3 File
 #. Attachment'
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
-msgid "Exclude these DocTypes from the automatic S3 upload and store them locally."
-msgstr "Diese DocTypes vom automatischen S3-Upload ausschließen und lokal speichern."
+msgid "Exclude these DocTypes from the automatic S3 attachment upload and store their attachments locally."
+msgstr "Anhänge dieser DocTypes vom automatischen S3-Upload ausschließen und lokal speichern."
 
-#: frappe_s3_attachment/controller.py:151
+#: frappe_s3_attachment/controller.py:154
 msgid "File Upload Failed. Please try again."
 msgstr "Datei-Upload fehlgeschlagen. Bitte versuchen Sie es erneut."
 
@@ -136,6 +136,12 @@ msgstr "Ablaufzeit der signierten URL"
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
 msgid "System Manager"
 msgstr "Systemmanager"
+
+#. Description of the 'Delete file from cloud ' (Check) field in DocType 'S3
+#. File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Toggle whether files that are deleted in the app will also be deleted in the S3 bucket."
+msgstr "Legt fest, ob Dateien, die in der App gelöscht werden, auch im S3-Bucket gelöscht werden."
 
 #. Description of the 'Signed URL expiry time' (Int) field in DocType 'S3 File
 #. Attachment'

@@ -30,6 +30,7 @@
   },
   {
    "default": "0",
+   "description": "Toggle whether files that are deleted in the app will also be deleted in the S3 bucket.",
    "fieldname": "delete_file_from_cloud",
    "fieldtype": "Check",
    "label": "Delete file from cloud "
@@ -107,7 +108,7 @@
    "label": "Ignored DocTypes"
   },
   {
-   "description": "Exclude these DocTypes from the automatic S3 upload and store them locally.",
+   "description": "Exclude these DocTypes from the automatic S3 attachment upload and store their attachments locally.",
    "fieldname": "ignored_doctypes",
    "fieldtype": "Table",
    "options": "S3 Ignored DocType Row"
@@ -115,7 +116,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-05-07 12:28:07.385847",
+ "modified": "2026-05-07 14:54:50.341870",
  "modified_by": "Administrator",
  "module": "Frappe S3 Attachment",
  "name": "S3 File Attachment",
