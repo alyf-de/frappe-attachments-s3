@@ -1,0 +1,147 @@
+# Translations template for frappe_s3_attachment.
+# Copyright (C) 2026 ALYF GmbH
+# This file is distributed under the same license as the Frappe S3 Attachment project.
+# ALYF GmbH <hallo@alyf.de>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: frappe_s3_attachment\n"
+"Report-Msgid-Bugs-To: hallo@alyf.de\n"
+"POT-Creation-Date: 2026-05-07 13:12+0200\n"
+"PO-Revision-Date: 2026-05-07 13:12+0200\n"
+"Last-Translator: ALYF GmbH <hallo@alyf.de>\n"
+"Language-Team: ALYF GmbH <hallo@alyf.de>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.13.1\n"
+
+#. Label of a Data field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.py:22
+msgid "Access Key"
+msgstr ""
+
+#: frappe_s3_attachment/controller.py:160
+msgid "Access denied: Could not delete file"
+msgstr ""
+
+#. Label of a Data field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Bucket Name"
+msgstr ""
+
+#. Label of a Check field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Delete file from cloud "
+msgstr ""
+
+#. Label of a Link field in DocType 'S3 Ignored DocType Row'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_ignored_doctype_row/s3_ignored_doctype_row.json
+msgid "DocType"
+msgstr ""
+
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.py:34
+msgid "Enter a valid HTTPS URL in {0}, for example: {1}."
+msgstr ""
+
+#. Description of the 'ignored_doctypes' (Table) field in DocType 'S3 File
+#. Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Exclude these DocTypes from the automatic S3 upload and store them locally."
+msgstr ""
+
+#: frappe_s3_attachment/controller.py:151
+msgid "File Upload Failed. Please try again."
+msgstr ""
+
+#. Label of a Data field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Folder Name"
+msgstr ""
+
+#: frappe_s3_attachment/config/desktop.py:11
+msgid "Frappe S3 Attachment"
+msgstr ""
+
+#. Label of a Section Break field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "General Configuration"
+msgstr ""
+
+#. Label of a Section Break field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Ignored DocTypes"
+msgstr ""
+
+#. Description of the 'S3 Endoint URL' (Data) field in DocType 'S3 File
+#. Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Leave blank for AWS. For Hetzner set for example: <b>https://nbg1.your-objectstorage.com</b>."
+msgstr ""
+
+#. Label of a Button field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Migrate Existing Files"
+msgstr ""
+
+#. Label of a Section Break field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "S3 API Credentials"
+msgstr ""
+
+#. Label of a Data field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "S3 Bucket Region Name"
+msgstr ""
+
+#. Label of a Data field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "S3 Endoint URL"
+msgstr ""
+
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.py:35
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.py:42
+msgid "S3 Endpoint URL"
+msgstr ""
+
+#. Name of a DocType
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "S3 File Attachment"
+msgstr ""
+
+#. Name of a DocType
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_ignored_doctype_row/s3_ignored_doctype_row.json
+msgid "S3 Ignored DocType Row"
+msgstr ""
+
+#. Label of a Password field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.py:22
+msgid "Secret Key"
+msgstr ""
+
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.py:21
+msgid "Set both {0} and {1}, or leave both empty."
+msgstr ""
+
+#. Label of a Int field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Signed URL expiry time"
+msgstr ""
+
+#. Name of a role
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "System Manager"
+msgstr ""
+
+#. Description of the 'Signed URL expiry time' (Int) field in DocType 'S3 File
+#. Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "in seconds"
+msgstr ""
+
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.py:41
+msgid "{0} must not include query strings or fragments."
+msgstr ""
+

@@ -2,11 +2,11 @@ from . import __version__ as app_version
 
 app_name = "frappe_s3_attachment"
 app_title = "Frappe S3 Attachment"
-app_publisher = "Frappe"
-app_description = "Frappe app to make file upload to S3 through attach file option."
+app_publisher = "ALYF GmbH"
+app_description = "Frappe app to make file upload automatically upload and read from S3"
 app_icon = "octicon octicon-file-directory"
 app_color = "grey"
-app_email = "ramesh.ravi@zerodha.com"
+app_email = "hallo@alyf.de"
 app_license = "MIT"
 
 # Includes in <head>
@@ -57,7 +57,7 @@ doctype_list_js = {
 # ------------
 
 # before_install = "frappe_s3_attachment.install.before_install"
-# after_install = "frappe_s3_attachment.install.after_install"
+after_install = "frappe_s3_attachment.install.after_install"
 
 # Desk Notifications
 # ------------------

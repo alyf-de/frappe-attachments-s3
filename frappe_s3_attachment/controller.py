@@ -32,7 +32,7 @@ class S3Operations:
 
 		# use credentials from the S3 File Attachment singleton, if available
 		# otherwise fall back to boto3 default credential resolution
-		secret = self.s3_settings_doc.get_password("secret_key")
+		secret = self.s3_settings_doc.get_password("secret_key", raise_exception=False)
 		if self.s3_settings_doc.access_key and secret:
 			client_kwargs["aws_access_key_id"] = self.s3_settings_doc.access_key
 			client_kwargs["aws_secret_access_key"] = secret
@@ -40,6 +40,15 @@ class S3Operations:
 		self.S3_CLIENT = boto3.client("s3", **client_kwargs)
 		self.BUCKET = self.s3_settings_doc.bucket_name
 		self.folder_name = self.s3_settings_doc.folder_name
+
+	def get_ignored_doctypes(self):
+		"""Return ignored parent doctypes configured in S3 settings."""
+		configured_ignored = {
+			row.doctype_name for row in (self.s3_settings_doc.ignored_doctypes or []) if row.doctype_name
+		}
+		# Keep historical default unless explicitly overridden by config.
+		configured_ignored.add("Data Import")
+		return configured_ignored
 
 	def strip_special_chars(self, file_name):
 		"""
@@ -184,7 +193,6 @@ class S3Operations:
 		return url
 
 
-@frappe.whitelist()
 def file_upload_to_s3(doc, method):
 	"""
 	check and upload files to s3. the path check and
@@ -194,7 +202,7 @@ def file_upload_to_s3(doc, method):
 	site_path = frappe.utils.get_site_path()
 	parent_doctype = doc.attached_to_doctype or "File"
 	parent_name = doc.attached_to_name
-	ignore_s3_upload_for_doctype = frappe.local.conf.get("ignore_s3_upload_for_doctype") or ["Data Import"]
+	ignore_s3_upload_for_doctype = s3_upload.get_ignored_doctypes()
 	if parent_doctype not in ignore_s3_upload_for_doctype:
 		if not doc.is_private:
 			file_path = site_path + "/public" + path

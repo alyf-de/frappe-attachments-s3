@@ -18,13 +18,14 @@ def _make_settings(**overrides):
 		"region_name": "fsn1",
 		"bucket_name": "test-bucket",
 		"folder_name": "",
+		"ignored_doctypes": [],
 		"signed_url_expiry_time": 300,
 		"delete_file_from_cloud": 0,
 	}
 	merged.update({k: v for k, v in overrides.items() if k != "_secret_password"})
 	settings = frappe._dict(merged)
 
-	def get_password(fieldname):
+	def get_password(fieldname, raise_exception=False):
 		if fieldname == "secret_key":
 			return secret_password
 		return ""
@@ -101,6 +102,13 @@ class TestControllerCharacterization(FrappeTestCase):
 				key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
 		self.assertEqual(key, "custom/path/foo")
 
+	def test_get_ignored_doctypes_includes_default_and_configured_values(self):
+		self.settings.ignored_doctypes = [frappe._dict({"doctype_name": "Sales Invoice"})]
+		s3 = controller.S3Operations()
+		ignored_doctypes = s3.get_ignored_doctypes()
+		self.assertIn("Data Import", ignored_doctypes)
+		self.assertIn("Sales Invoice", ignored_doctypes)
+
 	def test_upload_public_sets_acl_public_read(self):
 		with patch("frappe_s3_attachment.controller.magic.from_file", return_value="application/pdf"):
 			s3 = controller.S3Operations()
@@ -171,6 +179,27 @@ class TestControllerCharacterization(FrappeTestCase):
 			}
 		)
 		mock_s3_ops = MagicMock()
+		mock_s3_ops.get_ignored_doctypes.return_value = {"Data Import"}
+		mock_s3_class = MagicMock(return_value=mock_s3_ops)
+		with patch("frappe_s3_attachment.controller.S3Operations", mock_s3_class):
+			controller.file_upload_to_s3(doc, "after_insert")
+
+		mock_s3_ops.upload_files_to_s3_with_key.assert_not_called()
+		self.assertEqual(doc.file_url, "/private/files/my.pdf")
+
+	def test_file_upload_to_s3_skips_configured_ignored_doctype(self):
+		doc = frappe._dict(
+			{
+				"name": "FILE-TEST-1B",
+				"file_url": "/private/files/my.pdf",
+				"attached_to_doctype": "Sales Invoice",
+				"attached_to_name": "SINV-0001",
+				"file_name": "my.pdf",
+				"is_private": 1,
+			}
+		)
+		mock_s3_ops = MagicMock()
+		mock_s3_ops.get_ignored_doctypes.return_value = {"Sales Invoice", "Data Import"}
 		mock_s3_class = MagicMock(return_value=mock_s3_ops)
 		with patch("frappe_s3_attachment.controller.S3Operations", mock_s3_class):
 			controller.file_upload_to_s3(doc, "after_insert")
