@@ -184,7 +184,6 @@ class S3Operations:
 		return url
 
 
-@frappe.whitelist()
 def file_upload_to_s3(doc, method):
 	"""
 	check and upload files to s3. the path check and
