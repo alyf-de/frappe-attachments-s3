@@ -22,13 +22,15 @@ class S3Operations:
 			"S3 File Attachment",
 			"S3 File Attachment",
 		)
+		config_kwargs = {"signature_version": "s3v4"}
 		client_kwargs = dict(
 			region_name=self.s3_settings_doc.region_name,
-			config=Config(signature_version="s3v4"),
 		)
-		# default to AWS S3 if no endpoint url is set
-		if self.s3_settings_doc.endpoint_url:
-			client_kwargs["endpoint_url"] = self.s3_settings_doc.endpoint_url
+		endpoint_url = (self.s3_settings_doc.endpoint_url or "").strip().rstrip("/")
+		# Custom S3 endpoints (for example Hetzner) are most reliable with path-style requests.
+		if endpoint_url:
+			client_kwargs["endpoint_url"] = endpoint_url
+			config_kwargs["s3"] = {"addressing_style": "path"}
 
 		# use credentials from the S3 File Attachment singleton, if available
 		# otherwise fall back to boto3 default credential resolution
@@ -37,6 +39,7 @@ class S3Operations:
 			client_kwargs["aws_access_key_id"] = self.s3_settings_doc.access_key
 			client_kwargs["aws_secret_access_key"] = secret
 
+		client_kwargs["config"] = Config(**config_kwargs)
 		self.S3_CLIENT = boto3.client("s3", **client_kwargs)
 		self.BUCKET = self.s3_settings_doc.bucket_name
 		self.folder_name = self.s3_settings_doc.folder_name

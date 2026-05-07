@@ -272,6 +272,7 @@ class TestEndpointUrl(FrappeTestCase):
 
 		_, kwargs = controller.boto3.client.call_args
 		self.assertEqual(kwargs.get("endpoint_url"), "https://fsn1.your-objectstorage.com")
+		self.assertEqual(kwargs["config"].s3.get("addressing_style"), "path")
 
 	def test_endpoint_url_omitted_when_blank(self):
 		self.settings.endpoint_url = ""
@@ -280,6 +281,7 @@ class TestEndpointUrl(FrappeTestCase):
 
 		_, kwargs = controller.boto3.client.call_args
 		self.assertNotIn("endpoint_url", kwargs)
+		self.assertEqual(kwargs["config"].s3, None)
 
 
 class TestNonAsciiFilenames(FrappeTestCase):

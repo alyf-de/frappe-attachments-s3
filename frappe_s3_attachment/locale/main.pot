@@ -1,16 +1,16 @@
-# Translations template for frappe_s3_attachment.
+# Translations template for Frappe S3 Attachment.
 # Copyright (C) 2026 ALYF GmbH
 # This file is distributed under the same license as the Frappe S3 Attachment project.
-# ALYF GmbH <hallo@alyf.de>, 2026.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: frappe_s3_attachment\n"
+"Project-Id-Version: Frappe S3 Attachment VERSION\n"
 "Report-Msgid-Bugs-To: hallo@alyf.de\n"
-"POT-Creation-Date: 2026-05-07 13:12+0200\n"
-"PO-Revision-Date: 2026-05-07 13:12+0200\n"
-"Last-Translator: ALYF GmbH <hallo@alyf.de>\n"
-"Language-Team: ALYF GmbH <hallo@alyf.de>\n"
+"POT-Creation-Date: 2026-05-07 14:59+0053\n"
+"PO-Revision-Date: 2026-05-07 14:59+0053\n"
+"Last-Translator: hallo@alyf.de\n"
+"Language-Team: hallo@alyf.de\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -22,7 +22,7 @@ msgstr ""
 msgid "Access Key"
 msgstr ""
 
-#: frappe_s3_attachment/controller.py:160
+#: frappe_s3_attachment/controller.py:163
 msgid "Access denied: Could not delete file"
 msgstr ""
 
@@ -48,10 +48,10 @@ msgstr ""
 #. Description of the 'ignored_doctypes' (Table) field in DocType 'S3 File
 #. Attachment'
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
-msgid "Exclude these DocTypes from the automatic S3 upload and store them locally."
+msgid "Exclude these DocTypes from the automatic S3 attachment upload and store their attachments locally."
 msgstr ""
 
-#: frappe_s3_attachment/controller.py:151
+#: frappe_s3_attachment/controller.py:154
 msgid "File Upload Failed. Please try again."
 msgstr ""
 
@@ -133,6 +133,12 @@ msgstr ""
 #. Name of a role
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
 msgid "System Manager"
+msgstr ""
+
+#. Description of the 'Delete file from cloud ' (Check) field in DocType 'S3
+#. File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Toggle whether files that are deleted in the app will also be deleted in the S3 bucket."
 msgstr ""
 
 #. Description of the 'Signed URL expiry time' (Int) field in DocType 'S3 File
