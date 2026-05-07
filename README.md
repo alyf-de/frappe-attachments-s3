@@ -41,7 +41,7 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 git diff b595155..HEAD -- path/to/file.py
 ```
 
-**Package version** follows pre-release tags during development (`0.0.x`); see releases for the mapping to merged work.
+**Current release**: `v0.1.0`
 
 #### Known limitations
 
@@ -53,12 +53,12 @@ These match upstream unless noted; they are candidates for follow-up hardening, 
 
 #### Configuration Setup
 
-1. Open single doctype "s3 File Attachment"
+1. Open single doctype "S3 File Attachment"
 2. Enter bucket name, access key, secret key, region, optional S3 endpoint URL, and folder name
     Folder Name- folder name is the default folder path in s3.
 3. Migrate existing files lets all the existing files in private and public folders
-    to be migrated to s3.
-4. Delete From Cloud when selected deletes the file form s3 bucket whenever a file
+    to be migrated to S3.
+4. Delete From Cloud when selected deletes the file form S3 bucket whenever a file
     is deleted from ui. By default the Delete from cloud will be unchecked.
 
 #### License
