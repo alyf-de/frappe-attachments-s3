@@ -32,7 +32,7 @@ class S3Operations:
 
 		# use credentials from the S3 File Attachment singleton, if available
 		# otherwise fall back to boto3 default credential resolution
-		secret = self.s3_settings_doc.get_password("secret_key")
+		secret = self.s3_settings_doc.get_password("secret_key", raise_exception=False)
 		if self.s3_settings_doc.access_key and secret:
 			client_kwargs["aws_access_key_id"] = self.s3_settings_doc.access_key
 			client_kwargs["aws_secret_access_key"] = secret

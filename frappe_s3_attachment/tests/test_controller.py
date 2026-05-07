@@ -25,7 +25,7 @@ def _make_settings(**overrides):
 	merged.update({k: v for k, v in overrides.items() if k != "_secret_password"})
 	settings = frappe._dict(merged)
 
-	def get_password(fieldname):
+	def get_password(fieldname, raise_exception=False):
 		if fieldname == "secret_key":
 			return secret_password
 		return ""

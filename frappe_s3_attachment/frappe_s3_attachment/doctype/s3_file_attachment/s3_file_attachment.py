@@ -15,7 +15,7 @@ class S3FileAttachment(Document):
 
 	def validate_credentials(self):
 		has_access_key = bool((self.access_key or "").strip())
-		has_secret_key = bool((self.get_password("secret_key") or "").strip())
+		has_secret_key = bool((self.get_password("secret_key", raise_exception=False) or "").strip())
 		if has_access_key != has_secret_key:
 			frappe.throw(
 				_("Set both {0} and {1}, or leave both empty.").format(

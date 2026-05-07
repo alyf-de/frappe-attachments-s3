@@ -24,7 +24,9 @@ class TestS3FileAttachment(unittest.TestCase):
 				"endpoint_url": endpoint_url,
 			}
 		)
-		doc.get_password = lambda fieldname: secret_key if fieldname == "secret_key" else ""
+		doc.get_password = (
+			lambda fieldname, raise_exception=False: secret_key if fieldname == "secret_key" else ""
+		)
 		return doc
 
 	def test_validate_credentials_requires_access_and_secret_together(self):
