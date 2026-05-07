@@ -35,7 +35,9 @@
   {
    "fieldname": "bucket_name",
    "fieldtype": "Data",
-   "label": "Bucket Name"
+   "in_list_view": 1,
+   "label": "Bucket Name",
+   "reqd": 1
   },
   {
    "fieldname": "section_break_7",
@@ -44,7 +46,9 @@
   {
    "fieldname": "region_name",
    "fieldtype": "Data",
-   "label": "S3 Bucket Region Name"
+   "in_list_view": 1,
+   "label": "S3 Bucket Region Name",
+   "reqd": 1
   },
   {
    "fieldname": "folder_name",
@@ -56,7 +60,8 @@
    "description": "in seconds",
    "fieldname": "signed_url_expiry_time",
    "fieldtype": "Int",
-   "label": "Signed URL expiry time"
+   "label": "Signed URL expiry time",
+   "non_negative": 1
   },
   {
    "fieldname": "section_break_10",
@@ -96,7 +101,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-05-06 15:51:15.174225",
+ "modified": "2026-05-07 11:50:54.189934",
  "modified_by": "Administrator",
  "module": "Frappe S3 Attachment",
  "name": "S3 File Attachment",
