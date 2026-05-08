@@ -3,7 +3,7 @@
 Frappe app to make file upload automatically upload and read from S3.  
 Maintained as a fork of [zerodha/frappe-attachments-s3](https://github.com/zerodha/frappe-attachments-s3) under [alyf-de/frappe-attachments-s3](https://github.com/alyf-de/frappe-attachments-s3).
 
-The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, characterization and TDD tests, and tagged release **v0.1.0**. Optional next steps include MinIO-backed integration tests, a consolidated **v16** forward-compatibility pass, and further hardening—not required for normal installs.
+The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, characterization and TDD tests, and tagged release **v0.1.1**. Optional next steps include a consolidated **v16** forward-compatibility pass and further hardening—not required for normal installs.
 
 #### Features
 
@@ -19,12 +19,12 @@ The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filena
 1. `bench get-app https://github.com/alyf-de/frappe-attachments-s3 --branch version-15`
 2. `bench install-app frappe_s3_attachment`
 
-To pin an exact revision, checkout tag [`v0.1.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.1.0) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
+To pin an exact revision, checkout tag [`v0.1.1`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.1.1) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 #### Branches
 
 - `develop`: default branch; upstream rebases and feature work land here first.
-- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.1.0**).
+- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.1.1**).
 - `version-16`: to be created at v16 cutover.
 
 #### Changes vs upstream
@@ -50,7 +50,7 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 git diff b595155..HEAD -- path/to/file.py
 ```
 
-**Current release**: [`v0.1.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.1.0) — see [CHANGELOG.md](CHANGELOG.md).
+**Current release**: [`v0.1.1`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.1.1) — see [CHANGELOG.md](CHANGELOG.md).
 
 #### Known limitations
 
@@ -58,7 +58,37 @@ These match upstream unless noted; further hardening is tracked as follow-up wor
 
 - **`content_hash`** stores the S3 object key for uploaded files, which can interact with core **File** validation and future Frappe versions; plan a dedicated field or migration if you rely on strict content-hash semantics (see upstream discussions around **File** and remote storage).
 
-Optional automation backlog: MinIO integration tests in CI, v16 compatibility audit (`python-magic` → `filetype`, test base classes, **File** `content_hash` semantics, explicit **boto3** pin).
+Optional automation backlog: v16 compatibility audit (`python-magic` → `filetype`, test base classes, **File** `content_hash` semantics, explicit **boto3** pin).
+
+#### MinIO integration tests
+
+The integration suite in `frappe_s3_attachment/tests/test_minio_integration.py` is opt-in and runs only when `RUN_MINIO_INTEGRATION_TESTS=1`.
+
+Start a local MinIO instance:
+
+```bash
+docker run --rm -d \
+  --name frappe-s3-minio \
+  -p 9000:9000 \
+  -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin \
+  quay.io/minio/minio:latest \
+  server /data --address ":9000"
+```
+
+Run tests with MinIO enabled:
+
+```bash
+export RUN_MINIO_INTEGRATION_TESTS=1
+export FRAPPE_S3_ATTACHMENT_MINIO_ENDPOINT="http://127.0.0.1:9000"
+export FRAPPE_S3_ATTACHMENT_MINIO_ACCESS_KEY="minioadmin"
+export FRAPPE_S3_ATTACHMENT_MINIO_SECRET_KEY="minioadmin"
+export FRAPPE_S3_ATTACHMENT_MINIO_BUCKET="frappe-s3-attachment-test"
+export FRAPPE_S3_ATTACHMENT_MINIO_REGION="us-east-1"
+bench --site <site> run-tests --app frappe_s3_attachment
+```
+
+When `RUN_MINIO_INTEGRATION_TESTS` is unset (or not `"1"`), these tests are skipped and the standard mocked suite still runs.
 
 #### Hetzner Object Storage
 
