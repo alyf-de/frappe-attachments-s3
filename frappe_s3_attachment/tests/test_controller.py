@@ -249,7 +249,7 @@ class TestControllerCharacterization(FrappeTestCase):
 		mock_s3_ops.BUCKET = "test-bucket"
 		with patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops):
 			with patch("frappe_s3_attachment.controller.os.remove"):
-				with patch("frappe_s3_attachment.controller.frappe.db.sql"):
+				with patch("frappe_s3_attachment.controller.frappe.db.sql") as db_sql:
 					with patch("frappe_s3_attachment.controller.frappe.db.commit"):
 						with patch("frappe_s3_attachment.controller.frappe.db.set_value") as set_value:
 							with patch(
@@ -260,6 +260,44 @@ class TestControllerCharacterization(FrappeTestCase):
 
 		set_value.assert_called_once_with("Website Settings", "Website Settings", "brand_image", doc.file_url)
 		self.assertEqual(doc.file_url, "https://s3.local/test-bucket/shop/path/logo.png")
+		self.assertEqual(doc.s3_object_key, "shop/path/logo.png")
+		update_sql, update_params = db_sql.call_args.args
+		self.assertIn("s3_object_key=", update_sql)
+		self.assertNotIn("content_hash=", update_sql)
+		self.assertEqual(update_params[3], "shop/path/logo.png")
+
+	def test_delete_from_cloud_uses_s3_object_key(self):
+		doc = frappe._dict({"s3_object_key": "shop/path/logo.png", "content_hash": "real-sha-256"})
+		mock_s3_ops = MagicMock()
+		with patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops):
+			controller.delete_from_cloud(doc, "on_trash")
+		mock_s3_ops.delete_from_s3.assert_called_once_with("shop/path/logo.png")
+
+	def test_delete_from_cloud_skips_when_no_s3_object_key(self):
+		doc = frappe._dict({"s3_object_key": None, "content_hash": "real-sha-256"})
+		mock_s3_class = MagicMock()
+		with patch("frappe_s3_attachment.controller.S3Operations", mock_s3_class):
+			controller.delete_from_cloud(doc, "on_trash")
+		mock_s3_class.assert_not_called()
+
+	def test_generate_file_lookup_uses_s3_object_key(self):
+		"""generate_file must resolve the File row by s3_object_key, not content_hash."""
+		settings = _make_settings()
+
+		def selective_get_doc(*args, **kwargs):
+			if args and args[0] == "S3 File Attachment":
+				return settings
+			return MagicMock(check_permission=MagicMock())
+
+		with patch("frappe_s3_attachment.controller.frappe.db.get_value") as db_get_value:
+			db_get_value.return_value = "FILE-LOOKUP-1"
+			with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=selective_get_doc):
+				frappe.local.response = frappe._dict()
+				self.mock_s3_client.generate_presigned_url.return_value = "https://signed.example/x"
+				controller.generate_file(key="some/s3/key", file_name="x.pdf")
+
+		filters = db_get_value.call_args.args[1]
+		self.assertEqual(filters, {"s3_object_key": "some/s3/key"})
 
 	def test_s3_file_regex_match_accepts_public_and_private_urls(self):
 		self.assertTrue(controller.s3_file_regex_match("https://fsn1.your-objectstorage.com/bucket/key"))
@@ -414,7 +452,7 @@ class TestGenerateFilePermissions(FrappeTestCase):
 				"is_private": 1,
 			}
 		).insert()
-		frappe.db.set_value("File", f.name, "content_hash", "deny-key-perm-test")
+		frappe.db.set_value("File", f.name, "s3_object_key", "deny-key-perm-test")
 		self._ensure_perm_test_user()
 		frappe.set_user(_PERM_TEST_USER)
 		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
@@ -432,7 +470,7 @@ class TestGenerateFilePermissions(FrappeTestCase):
 				"is_private": 1,
 			}
 		).insert()
-		frappe.db.set_value("File", f.name, {"content_hash": "ok-key-perm-test", "owner": _PERM_TEST_USER})
+		frappe.db.set_value("File", f.name, {"s3_object_key": "ok-key-perm-test", "owner": _PERM_TEST_USER})
 
 		frappe.set_user(_PERM_TEST_USER)
 		frappe.local.response = frappe._dict()

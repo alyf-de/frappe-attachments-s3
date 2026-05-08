@@ -58,6 +58,7 @@ doctype_list_js = {
 
 # before_install = "frappe_s3_attachment.install.before_install"
 after_install = "frappe_s3_attachment.install.after_install"
+after_migrate = "frappe_s3_attachment.install.after_migrate"
 
 # Desk Notifications
 # ------------------

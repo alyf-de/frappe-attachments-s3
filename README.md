@@ -3,7 +3,7 @@
 Frappe app to make file upload automatically upload and read from S3.  
 Maintained as a fork of [zerodha/frappe-attachments-s3](https://github.com/zerodha/frappe-attachments-s3) under [alyf-de/frappe-attachments-s3](https://github.com/alyf-de/frappe-attachments-s3).
 
-The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, characterization and TDD tests, and tagged release **v0.1.1**. Optional next steps include a consolidated **v16** forward-compatibility pass and further hardening—not required for normal installs.
+The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, a dedicated **File** `s3_object_key` locator field with automatic install/migrate setup, characterization and TDD tests, and tagged release **v0.2.0**. Optional next steps include a consolidated **v16** forward-compatibility pass and further hardening—not required for normal installs.
 
 #### Features
 
@@ -19,12 +19,12 @@ The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filena
 1. `bench get-app https://github.com/alyf-de/frappe-attachments-s3 --branch version-15`
 2. `bench install-app frappe_s3_attachment`
 
-To pin an exact revision, checkout tag [`v0.1.1`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.1.1) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
+To pin an exact revision, checkout tag [`v0.2.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.0) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 #### Branches
 
 - `develop`: default branch; upstream rebases and feature work land here first.
-- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.1.1**).
+- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.2.0**).
 - `version-16`: to be created at v16 cutover.
 
 #### Changes vs upstream
@@ -35,7 +35,8 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 | ----- | ------------------ | --------- |
 | **S3-compatible endpoint** | Uses default AWS endpoints only. | **S3 File Attachment** includes an endpoint URL field; when set, it is passed to `boto3.client(..., endpoint_url=...)` with **path-style** addressing so providers such as **Hetzner Object Storage** work reliably. |
 | **Non-ASCII filenames** | Raw names in S3 metadata / content-disposition can break uploads or downloads for some characters. | Metadata `file_name` is ASCII-normalized; presigned `get_object` responses use RFC 5987 `filename*` for `ResponseContentDisposition` so original Unicode names round-trip in browsers. |
-| **`generate_file` (signed URL)** | Any authenticated caller could request a presigned URL if they knew or guessed the object key (key stored in **File** `content_hash`). | Resolves the **File** row by `content_hash`, runs **`check_permission('read')`** on that **File**, then redirects; missing row raises **Does Not Exist** (404). |
+| **S3 object key storage** | Stored the S3 object key in the core **File** `content_hash` field, conflicting with Frappe's content-identity / dedupe semantics and risking column-length issues for long keys. | Stores the key in a dedicated **File** custom field `s3_object_key` (Data, length 255, read-only and visible in the Desk for audit, indexed with prefix 191 on MariaDB) ensured automatically on install/migrate; an idempotent backfill patch copies legacy values from `content_hash`. |
+| **`generate_file` (signed URL)** | Any authenticated caller could request a presigned URL if they knew or guessed the object key (key stored in **File** `content_hash`). | Resolves the **File** row by `s3_object_key`, runs **`check_permission('read')`** on that **File**, then redirects; missing row raises **Does Not Exist** (404). |
 | **Ignored DocTypes** | Effectively a fixed skip list (e.g. **Data Import**). | Child table **S3 Ignored DocType Row** on the singleton to add more parent DocTypes; **Data Import** is still always ignored. |
 | **Upload hook exposure** | `file_upload_to_s3` was whitelisted like other helpers. | Hook is **not** whitelisted; only intentional API entry points (e.g. `generate_file`, `migrate_existing_files`) remain exposed. |
 | **Credentials** | Typical upstream installs used plain **Data** for secrets. | _Secret Key_ uses **Password**; reads use `get_password`. |
@@ -50,15 +51,15 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 git diff b595155..HEAD -- path/to/file.py
 ```
 
-**Current release**: [`v0.1.1`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.1.1) — see [CHANGELOG.md](CHANGELOG.md).
+**Current release**: [`v0.2.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.0) — see [CHANGELOG.md](CHANGELOG.md).
 
 #### Known limitations
 
 These match upstream unless noted; further hardening is tracked as follow-up work, not regressions introduced only in this fork:
 
-- **`content_hash`** stores the S3 object key for uploaded files, which can interact with core **File** validation and future Frappe versions; plan a dedicated field or migration if you rely on strict content-hash semantics (see upstream discussions around **File** and remote storage).
+- **Backfill on upgrade**: rows uploaded by earlier (`<= 0.1.x`) versions of this app stored the S3 key in `content_hash`. The bundled patch copies those values into `s3_object_key` automatically on `bench migrate`; verify private downloads and cloud delete after upgrading and consult [issue #10](https://github.com/alyf-de/frappe-attachments-s3/issues/10) for the rationale.
 
-Optional automation backlog: v16 compatibility audit (test base classes, **File** `content_hash` semantics, explicit **boto3** pin).
+Optional automation backlog: v16 compatibility audit (test base classes, explicit **boto3** pin).
 
 #### MinIO integration tests
 

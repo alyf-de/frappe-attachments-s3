@@ -151,7 +151,7 @@ class TestMinioIntegration(FrappeTestCase):
 		controller.file_upload_to_s3(file_doc, "after_insert")
 		file_doc.reload()
 		self.settings = self._build_settings(delete_file_from_cloud=1)
-		key = file_doc.content_hash
+		key = file_doc.s3_object_key
 		self._assert_object_exists(key)
 
 		controller.delete_from_cloud(file_doc, "on_trash")
