@@ -1,4 +1,5 @@
 import datetime
+import mimetypes
 import os
 import random
 import re
@@ -7,8 +8,8 @@ import unicodedata
 import urllib.parse
 
 import boto3
+import filetype
 import frappe
-import magic
 from botocore.client import Config
 from botocore.exceptions import ClientError
 
@@ -118,9 +119,10 @@ class S3Operations:
 		Uploads a new file to S3.
 		Strips the file extension to set the content_type in metadata.
 		"""
-		mime_type = magic.from_file(file_path, mime=True)
 		key = self.key_generator(file_name, parent_doctype, parent_name)
-		content_type = mime_type
+		kind = filetype.guess(file_path)
+		content_type = (kind.mime if kind else None) or mimetypes.guess_type(file_name)[0]
+		content_type = content_type or "application/octet-stream"
 		ascii_file_name = unicodedata.normalize("NFKD", file_name).encode("ascii", "ignore").decode("ascii")
 		try:
 			if is_private:
