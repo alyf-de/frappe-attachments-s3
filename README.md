@@ -58,7 +58,7 @@ These match upstream unless noted; further hardening is tracked as follow-up wor
 
 - **`content_hash`** stores the S3 object key for uploaded files, which can interact with core **File** validation and future Frappe versions; plan a dedicated field or migration if you rely on strict content-hash semantics (see upstream discussions around **File** and remote storage).
 
-Optional automation backlog: v16 compatibility audit (`python-magic` → `filetype`, test base classes, **File** `content_hash` semantics, explicit **boto3** pin).
+Optional automation backlog: v16 compatibility audit (test base classes, **File** `content_hash` semantics, explicit **boto3** pin).
 
 #### MinIO integration tests
 

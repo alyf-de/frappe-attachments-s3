@@ -10,6 +10,10 @@ from frappe_s3_attachment import controller
 _REAL_FRAPPE_GET_DOC = frappe.get_doc
 
 
+def _filetype_kind(mime):
+	return MagicMock(mime=mime)
+
+
 def _make_settings(**overrides):
 	secret_password = overrides.pop("_secret_password", "")
 	merged = {
@@ -110,7 +114,10 @@ class TestControllerCharacterization(FrappeTestCase):
 		self.assertIn("Sales Invoice", ignored_doctypes)
 
 	def test_upload_public_sets_acl_public_read(self):
-		with patch("frappe_s3_attachment.controller.magic.from_file", return_value="application/pdf"):
+		with patch(
+			"frappe_s3_attachment.controller.filetype.guess",
+			return_value=_filetype_kind("application/pdf"),
+		):
 			s3 = controller.S3Operations()
 			s3.upload_files_to_s3_with_key(
 				"/tmp/invoice.pdf",
@@ -125,7 +132,10 @@ class TestControllerCharacterization(FrappeTestCase):
 		self.assertEqual(call.kwargs["ExtraArgs"]["ACL"], "public-read")
 
 	def test_upload_private_no_acl_kwarg(self):
-		with patch("frappe_s3_attachment.controller.magic.from_file", return_value="application/pdf"):
+		with patch(
+			"frappe_s3_attachment.controller.filetype.guess",
+			return_value=_filetype_kind("application/pdf"),
+		):
 			s3 = controller.S3Operations()
 			s3.upload_files_to_s3_with_key(
 				"/tmp/private.pdf",
@@ -138,10 +148,11 @@ class TestControllerCharacterization(FrappeTestCase):
 		call = self.mock_s3_client.upload_file.call_args
 		self.assertNotIn("ACL", call.kwargs["ExtraArgs"])
 
-	def test_upload_uses_magic_for_mime_type(self):
+	def test_upload_uses_filetype_for_mime_type(self):
 		with patch(
-			"frappe_s3_attachment.controller.magic.from_file", return_value="application/json"
-		) as mock_magic:
+			"frappe_s3_attachment.controller.filetype.guess",
+			return_value=_filetype_kind("application/json"),
+		) as mock_filetype_guess:
 			s3 = controller.S3Operations()
 			s3.upload_files_to_s3_with_key(
 				"/tmp/test.json",
@@ -151,9 +162,23 @@ class TestControllerCharacterization(FrappeTestCase):
 				"FILE-0001",
 			)
 
-		mock_magic.assert_called_once_with("/tmp/test.json", mime=True)
+		mock_filetype_guess.assert_called_once_with("/tmp/test.json")
 		call = self.mock_s3_client.upload_file.call_args
 		self.assertEqual(call.kwargs["ExtraArgs"]["ContentType"], "application/json")
+
+	def test_upload_falls_back_to_filename_mime_when_filetype_unknown(self):
+		with patch("frappe_s3_attachment.controller.filetype.guess", return_value=None):
+			s3 = controller.S3Operations()
+			s3.upload_files_to_s3_with_key(
+				"/tmp/test.csv",
+				"test.csv",
+				1,
+				"File",
+				"FILE-0001",
+			)
+
+		call = self.mock_s3_client.upload_file.call_args
+		self.assertEqual(call.kwargs["ExtraArgs"]["ContentType"], "text/csv")
 
 	def test_delete_from_s3_no_op_when_flag_disabled(self):
 		self.settings.delete_file_from_cloud = 0
@@ -310,7 +335,10 @@ class TestNonAsciiFilenames(FrappeTestCase):
 		self.addCleanup(self.patch_hooks.stop)
 
 	def test_metadata_filename_is_ascii(self):
-		with patch("frappe_s3_attachment.controller.magic.from_file", return_value="application/pdf"):
+		with patch(
+			"frappe_s3_attachment.controller.filetype.guess",
+			return_value=_filetype_kind("application/pdf"),
+		):
 			s3 = controller.S3Operations()
 			s3.upload_files_to_s3_with_key(
 				"/tmp/Pflanzenrückgabe.pdf",
