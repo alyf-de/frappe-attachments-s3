@@ -120,3 +120,110 @@ jobs:
           bench --site test_site run-tests --app frappe_s3_attachment
         env:
           TYPE: server
+
+  tests-minio:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    name: Server (MinIO integration)
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      mariadb:
+        image: mariadb:11.8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: --health-cmd="mariadb-admin ping" --health-interval=5s --health-timeout=2s --health-retries=3
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          check-latest: true
+
+      - name: Install MariaDB Client
+        run: |
+          sudo apt update
+          sudo apt-get install mariadb-client
+
+      - name: Start MinIO
+        run: |
+          docker run -d \
+            --name minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            quay.io/minio/minio:latest \
+            server /data --address ":9000"
+
+          for i in {1..30}; do
+            if curl -fsS "http://127.0.0.1:9000/minio/health/live" > /dev/null; then
+              echo "MinIO is healthy"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Setup
+        run: |
+          pip install frappe-bench boto3
+          bench init --skip-redis-config-generation --skip-assets --python "$(which python)" ~/frappe-bench
+          mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL character_set_server = 'utf8mb4'"
+          mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL collation_server = 'utf8mb4_unicode_ci'"
+          python - <<'PY'
+          import boto3
+          from botocore.client import Config
+          client = boto3.client(
+              "s3",
+              endpoint_url="http://127.0.0.1:9000",
+              aws_access_key_id="minioadmin",
+              aws_secret_access_key="minioadmin",
+              region_name="us-east-1",
+              config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+          )
+          buckets = {b["Name"] for b in client.list_buckets().get("Buckets", [])}
+          if "frappe-s3-attachment-test" not in buckets:
+              client.create_bucket(Bucket="frappe-s3-attachment-test")
+          PY
+
+      - name: Install
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench get-app --resolve-deps frappe_s3_attachment $GITHUB_WORKSPACE
+          bench setup requirements --dev
+          bench new-site --db-root-password root --admin-password admin test_site
+          bench --site test_site install-app frappe_s3_attachment
+          bench build
+        env:
+          CI: "Yes"
+
+      - name: Run Tests (with MinIO integration)
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          bench --site test_site run-tests --app frappe_s3_attachment
+        env:
+          TYPE: server
+          RUN_MINIO_INTEGRATION_TESTS: "1"
+          FRAPPE_S3_ATTACHMENT_MINIO_ENDPOINT: "http://127.0.0.1:9000"
+          FRAPPE_S3_ATTACHMENT_MINIO_ACCESS_KEY: "minioadmin"
+          FRAPPE_S3_ATTACHMENT_MINIO_SECRET_KEY: "minioadmin"
+          FRAPPE_S3_ATTACHMENT_MINIO_BUCKET: "frappe-s3-attachment-test"
+          FRAPPE_S3_ATTACHMENT_MINIO_REGION: "us-east-1"

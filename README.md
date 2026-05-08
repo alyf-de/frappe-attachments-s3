@@ -58,7 +58,37 @@ These match upstream unless noted; further hardening is tracked as follow-up wor
 
 - **`content_hash`** stores the S3 object key for uploaded files, which can interact with core **File** validation and future Frappe versions; plan a dedicated field or migration if you rely on strict content-hash semantics (see upstream discussions around **File** and remote storage).
 
-Optional automation backlog: MinIO integration tests in CI, v16 compatibility audit (`python-magic` → `filetype`, test base classes, **File** `content_hash` semantics, explicit **boto3** pin).
+Optional automation backlog: v16 compatibility audit (`python-magic` → `filetype`, test base classes, **File** `content_hash` semantics, explicit **boto3** pin).
+
+#### MinIO integration tests
+
+The integration suite in `frappe_s3_attachment/tests/test_minio_integration.py` is opt-in and runs only when `RUN_MINIO_INTEGRATION_TESTS=1`.
+
+Start a local MinIO instance:
+
+```bash
+docker run --rm -d \
+  --name frappe-s3-minio \
+  -p 9000:9000 \
+  -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin \
+  quay.io/minio/minio:latest \
+  server /data --address ":9000"
+```
+
+Run tests with MinIO enabled:
+
+```bash
+export RUN_MINIO_INTEGRATION_TESTS=1
+export FRAPPE_S3_ATTACHMENT_MINIO_ENDPOINT="http://127.0.0.1:9000"
+export FRAPPE_S3_ATTACHMENT_MINIO_ACCESS_KEY="minioadmin"
+export FRAPPE_S3_ATTACHMENT_MINIO_SECRET_KEY="minioadmin"
+export FRAPPE_S3_ATTACHMENT_MINIO_BUCKET="frappe-s3-attachment-test"
+export FRAPPE_S3_ATTACHMENT_MINIO_REGION="us-east-1"
+bench --site <site> run-tests --app frappe_s3_attachment
+```
+
+When `RUN_MINIO_INTEGRATION_TESTS` is unset (or not `"1"`), these tests are skipped and the standard mocked suite still runs.
 
 #### Hetzner Object Storage
 
