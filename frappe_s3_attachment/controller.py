@@ -327,6 +327,8 @@ def migrate_existing_files():
 
 def delete_from_cloud(doc, method):
 	"""Delete file from s3"""
+	if not doc.get("s3_object_key"):
+		return
 	s3 = S3Operations()
 	s3.delete_from_s3(doc.s3_object_key)
 
