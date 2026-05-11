@@ -9,11 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Dedicated **File** custom field `s3_object_key` (Data, length 255, hidden + read-only) ensured automatically on install and migrate, with an indexed lookup (prefix 191 on MariaDB, plain on Postgres) for fast presigned-URL resolution.
+- Dedicated **File** custom field `s3_object_key` (Data, length 255, read-only and visible in Desk for audit) ensured automatically on install and migrate, with an indexed lookup (prefix 191 on MariaDB, plain on Postgres) for fast presigned-URL resolution.
 - Backfill patch (`v0_2_0.backfill_s3_object_key`) that copies legacy `content_hash` values into `s3_object_key` for File rows whose `file_url` was managed by this app, then clears `content_hash` on app-managed S3 rows so existing data matches the upload-hook behaviour below.
 
 ### Changed
 
+- S3 upload MIME detection uses **`filetype`** (`filetype.guess`) with a filename-based fallback instead of **`python-magic`**, removing the **`libmagic`** system dependency.
 - Upload, presigned URL generation, and cloud-delete flows now read and write `s3_object_key` instead of overloading the core `content_hash` field.
 - After each successful S3 upload, **File** `content_hash` is cleared so Frappe core does not treat subsequent uploads as duplicates of S3-backed rows (same intent as dedupe bypass for remote URLs; avoids the private-file crash in [issue #12](https://github.com/alyf-de/frappe-attachments-s3/issues/12)).
 - `delete_from_cloud` is a no-op for File rows without an `s3_object_key`, so unrelated File deletions do not call out to S3.
