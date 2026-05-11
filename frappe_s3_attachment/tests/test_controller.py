@@ -249,7 +249,7 @@ class TestControllerCharacterization(FrappeTestCase):
 		mock_s3_ops.BUCKET = "test-bucket"
 		with patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops):
 			with patch("frappe_s3_attachment.controller.os.remove"):
-				with patch("frappe_s3_attachment.controller.frappe.db.sql"):
+				with patch("frappe_s3_attachment.controller.frappe.db.sql") as db_sql:
 					with patch("frappe_s3_attachment.controller.frappe.db.commit"):
 						with patch("frappe_s3_attachment.controller.frappe.db.set_value") as set_value:
 							with patch(
@@ -260,6 +260,45 @@ class TestControllerCharacterization(FrappeTestCase):
 
 		set_value.assert_called_once_with("Website Settings", "Website Settings", "brand_image", doc.file_url)
 		self.assertEqual(doc.file_url, "https://s3.local/test-bucket/shop/path/logo.png")
+		self.assertEqual(doc.s3_object_key, "shop/path/logo.png")
+		self.assertIsNone(doc.content_hash)
+		update_sql, update_params = db_sql.call_args.args
+		self.assertIn("s3_object_key=", update_sql)
+		self.assertIn("content_hash=NULL", "".join(update_sql.split()))
+		self.assertEqual(update_params[3], "shop/path/logo.png")
+
+	def test_delete_from_cloud_uses_s3_object_key(self):
+		doc = frappe._dict({"s3_object_key": "shop/path/logo.png", "content_hash": "real-sha-256"})
+		mock_s3_ops = MagicMock()
+		with patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops):
+			controller.delete_from_cloud(doc, "on_trash")
+		mock_s3_ops.delete_from_s3.assert_called_once_with("shop/path/logo.png")
+
+	def test_delete_from_cloud_skips_when_no_s3_object_key(self):
+		doc = frappe._dict({"s3_object_key": None, "content_hash": "real-sha-256"})
+		mock_s3_class = MagicMock()
+		with patch("frappe_s3_attachment.controller.S3Operations", mock_s3_class):
+			controller.delete_from_cloud(doc, "on_trash")
+		mock_s3_class.assert_not_called()
+
+	def test_generate_file_lookup_uses_s3_object_key(self):
+		"""generate_file must resolve the File row by s3_object_key, not content_hash."""
+		settings = _make_settings()
+
+		def selective_get_doc(*args, **kwargs):
+			if args and args[0] == "S3 File Attachment":
+				return settings
+			return MagicMock(check_permission=MagicMock())
+
+		with patch("frappe_s3_attachment.controller.frappe.db.get_value") as db_get_value:
+			db_get_value.return_value = "FILE-LOOKUP-1"
+			with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=selective_get_doc):
+				frappe.local.response = frappe._dict()
+				self.mock_s3_client.generate_presigned_url.return_value = "https://signed.example/x"
+				controller.generate_file(key="some/s3/key", file_name="x.pdf")
+
+		filters = db_get_value.call_args.args[1]
+		self.assertEqual(filters, {"s3_object_key": "some/s3/key"})
 
 	def test_s3_file_regex_match_accepts_public_and_private_urls(self):
 		self.assertTrue(controller.s3_file_regex_match("https://fsn1.your-objectstorage.com/bucket/key"))
@@ -371,7 +410,7 @@ _PERM_TEST_USER = "s3_attach_perm_test@test.local"
 
 
 class TestGenerateFilePermissions(FrappeTestCase):
-	"""Gate generate_file behind File read permission (content_hash → File row)."""
+	"""Gate generate_file behind File read permission (s3_object_key → File row)."""
 
 	def setUp(self):
 		super().setUp()
@@ -414,7 +453,7 @@ class TestGenerateFilePermissions(FrappeTestCase):
 				"is_private": 1,
 			}
 		).insert()
-		frappe.db.set_value("File", f.name, "content_hash", "deny-key-perm-test")
+		frappe.db.set_value("File", f.name, "s3_object_key", "deny-key-perm-test")
 		self._ensure_perm_test_user()
 		frappe.set_user(_PERM_TEST_USER)
 		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
@@ -432,7 +471,7 @@ class TestGenerateFilePermissions(FrappeTestCase):
 				"is_private": 1,
 			}
 		).insert()
-		frappe.db.set_value("File", f.name, {"content_hash": "ok-key-perm-test", "owner": _PERM_TEST_USER})
+		frappe.db.set_value("File", f.name, {"s3_object_key": "ok-key-perm-test", "owner": _PERM_TEST_USER})
 
 		frappe.set_user(_PERM_TEST_USER)
 		frappe.local.response = frappe._dict()
@@ -447,3 +486,84 @@ class TestGenerateFilePermissions(FrappeTestCase):
 		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
 			with self.assertRaises(frappe.DoesNotExistError):
 				controller.generate_file(key="no-such-file-row-key-zzz")
+
+
+class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
+	"""Regression for alyf-de/frappe-attachments-s3#12.
+
+	After an S3 private upload, ``content_hash`` is cleared so core
+	``save_file`` duplicate detection does not match a prior S3-backed row and
+	walk ``exists_on_disk`` for a ``/api/method/...`` URL.
+
+	This test simulates that post-upload row state (hook patched) and asserts a
+	second private upload with identical bytes succeeds.
+	"""
+
+	_PRIVATE_API_URL = (
+		"/api/method/frappe_s3_attachment.controller.generate_file"
+		"?key=fake/2026/05/08/File/AAAAAAAA_seed.txt&file_name=seed.txt"
+	)
+
+	def setUp(self):
+		super().setUp()
+		# Skip the after_insert S3 upload hook so the test does not need a bucket.
+		self._patch_upload_hook = patch("frappe_s3_attachment.controller.file_upload_to_s3")
+		self._patch_upload_hook.start()
+		self.addCleanup(self._patch_upload_hook.stop)
+		self._created: list[str] = []
+
+	def tearDown(self):
+		# Bypass on_trash to avoid contacting the live bucket configured on
+		# the test site (delete_from_cloud is registered as a doc_event hook
+		# and resolves through frappe.get_attr at delete time, so a
+		# unittest.mock patch does not always apply). The on-disk private
+		# files are small text bytes and stay under sites/<site>/private/files
+		# until next bench cleanup, which is acceptable for a regression
+		# marker test.
+		for name in self._created:
+			frappe.db.delete("File", {"name": name})
+		if self._created:
+			frappe.db.commit()
+		super().tearDown()
+
+	def test_two_private_uploads_with_same_content_do_not_crash(self):
+		content = "duplicate-private-content-#12"
+
+		first = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": "first.txt",
+				"content": content,
+				"is_private": 1,
+			}
+		).insert()
+		self._created.append(first.name)
+
+		# Simulate post-upload state: S3 hook clears content_hash (see controller).
+		frappe.db.set_value(
+			"File",
+			first.name,
+			{
+				"file_url": self._PRIVATE_API_URL,
+				"s3_object_key": "fake/2026/05/08/File/AAAAAAAA_seed.txt",
+				"content_hash": None,
+			},
+			update_modified=False,
+		)
+		frappe.db.commit()
+
+		second = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": "second.txt",
+				"content": content,
+				"is_private": 1,
+			}
+		).insert()
+		self._created.append(second.name)
+
+		first_hash = frappe.db.get_value("File", first.name, "content_hash")
+		second_hash = frappe.db.get_value("File", second.name, "content_hash")
+		self.assertIsNone(first_hash)
+		self.assertTrue(second_hash)
+		self.assertNotEqual(first_hash, second_hash)

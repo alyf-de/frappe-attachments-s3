@@ -49,6 +49,7 @@ class TestMinioIntegration(FrappeTestCase):
 	def setUp(self):
 		super().setUp()
 		self.uploaded_keys = set()
+		self.created_file_names = set()
 		self.settings = self._build_settings(delete_file_from_cloud=0)
 		self.patch_get_doc = patch(
 			"frappe_s3_attachment.controller.frappe.get_doc",
@@ -58,6 +59,16 @@ class TestMinioIntegration(FrappeTestCase):
 		self.addCleanup(self.patch_get_doc.stop)
 
 	def tearDown(self):
+		# controller.file_upload_to_s3 commits mid-test, escaping FrappeTestCase's
+		# rollback. Clean up the File rows we created so subsequent runs don't
+		# collide on content_hash duplicate detection in core File.save_file.
+		for name in self.created_file_names:
+			try:
+				frappe.delete_doc("File", name, force=True, ignore_permissions=True)
+			except frappe.DoesNotExistError:
+				pass
+		if self.created_file_names:
+			frappe.db.commit()
 		for key in self.uploaded_keys:
 			try:
 				self.minio_client.delete_object(Bucket=self.bucket_name, Key=key)
@@ -100,7 +111,7 @@ class TestMinioIntegration(FrappeTestCase):
 
 	def _create_file_doc(self, *, file_name, content, is_private):
 		with patch("frappe_s3_attachment.controller.file_upload_to_s3"):
-			return frappe.get_doc(
+			file_doc = frappe.get_doc(
 				{
 					"doctype": "File",
 					"file_name": file_name,
@@ -108,6 +119,8 @@ class TestMinioIntegration(FrappeTestCase):
 					"is_private": is_private,
 				}
 			).insert()
+		self.created_file_names.add(file_doc.name)
+		return file_doc
 
 	def _assert_object_exists(self, key):
 		self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
@@ -119,6 +132,8 @@ class TestMinioIntegration(FrappeTestCase):
 		self.assertTrue(os.path.exists(local_path))
 
 		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		self.assertFalse(file_doc.content_hash)
 		uploaded_url = file_doc.file_url
 		parsed_url = urllib.parse.urlparse(uploaded_url)
 		bucket_and_key = parsed_url.path.lstrip("/")
@@ -134,6 +149,8 @@ class TestMinioIntegration(FrappeTestCase):
 		self.assertTrue(os.path.exists(local_path))
 
 		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		self.assertFalse(file_doc.content_hash)
 		uploaded_url = file_doc.file_url
 		query = urllib.parse.parse_qs(urllib.parse.urlparse(uploaded_url).query)
 		key = query["key"][0]
@@ -151,7 +168,7 @@ class TestMinioIntegration(FrappeTestCase):
 		controller.file_upload_to_s3(file_doc, "after_insert")
 		file_doc.reload()
 		self.settings = self._build_settings(delete_file_from_cloud=1)
-		key = file_doc.content_hash
+		key = file_doc.s3_object_key
 		self._assert_object_exists(key)
 
 		controller.delete_from_cloud(file_doc, "on_trash")

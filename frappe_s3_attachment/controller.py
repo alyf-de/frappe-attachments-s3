@@ -225,11 +225,13 @@ def file_upload_to_s3(doc, method):
 		os.remove(file_path)
 		frappe.db.sql(
 			"""UPDATE `tabFile` SET file_url=%s, folder=%s,
-            old_parent=%s, content_hash=%s WHERE name=%s""",
+            old_parent=%s, s3_object_key=%s, content_hash=NULL WHERE name=%s""",
 			(file_url, "Home/Attachments", "Home/Attachments", key, doc.name),
 		)
 
 		doc.file_url = file_url
+		doc.s3_object_key = key
+		doc.content_hash = None
 
 		if parent_doctype and frappe.get_meta(parent_doctype).get("image_field"):
 			frappe.db.set_value(
@@ -248,7 +250,7 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 		frappe.local.response["body"] = "Key not found."
 		return
 
-	file_name_in_db = frappe.db.get_value("File", {"content_hash": key}, "name")
+	file_name_in_db = frappe.db.get_value("File", {"s3_object_key": key}, "name")
 	if not file_name_in_db:
 		raise frappe.DoesNotExistError(doctype="File")
 
@@ -297,9 +299,10 @@ def upload_existing_files_s3(name):
 
 		frappe.db.sql(
 			"""UPDATE `tabFile` SET file_url=%s, folder=%s,
-            old_parent=%s, content_hash=%s WHERE name=%s""",
+            old_parent=%s, s3_object_key=%s, content_hash=NULL WHERE name=%s""",
 			(file_url, "Home/Attachments", "Home/Attachments", key, doc.name),
 		)
+		doc.content_hash = None
 		frappe.db.commit()
 
 
@@ -326,8 +329,10 @@ def migrate_existing_files():
 
 def delete_from_cloud(doc, method):
 	"""Delete file from s3"""
+	if not doc.get("s3_object_key"):
+		return
 	s3 = S3Operations()
-	s3.delete_from_s3(doc.content_hash)
+	s3.delete_from_s3(doc.s3_object_key)
 
 
 @frappe.whitelist()
