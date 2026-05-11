@@ -225,12 +225,13 @@ def file_upload_to_s3(doc, method):
 		os.remove(file_path)
 		frappe.db.sql(
 			"""UPDATE `tabFile` SET file_url=%s, folder=%s,
-            old_parent=%s, s3_object_key=%s WHERE name=%s""",
+            old_parent=%s, s3_object_key=%s, content_hash=NULL WHERE name=%s""",
 			(file_url, "Home/Attachments", "Home/Attachments", key, doc.name),
 		)
 
 		doc.file_url = file_url
 		doc.s3_object_key = key
+		doc.content_hash = None
 
 		if parent_doctype and frappe.get_meta(parent_doctype).get("image_field"):
 			frappe.db.set_value(
@@ -298,9 +299,10 @@ def upload_existing_files_s3(name):
 
 		frappe.db.sql(
 			"""UPDATE `tabFile` SET file_url=%s, folder=%s,
-            old_parent=%s, s3_object_key=%s WHERE name=%s""",
+            old_parent=%s, s3_object_key=%s, content_hash=NULL WHERE name=%s""",
 			(file_url, "Home/Attachments", "Home/Attachments", key, doc.name),
 		)
+		doc.content_hash = None
 		frappe.db.commit()
 
 

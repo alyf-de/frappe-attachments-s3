@@ -8,6 +8,10 @@ This patch copies `content_hash -> s3_object_key` for File rows whose `file_url`
 matches the upload URL shapes this app produces (public bucket URL or the
 private `generate_file` endpoint), without overwriting `s3_object_key` values
 that have already been set by a newer upload path.
+
+Clears `content_hash` in the same ``set_value`` so core duplicate detection
+does not match subsequent uploads (see
+https://github.com/alyf-de/frappe-attachments-s3/issues/12).
 """
 
 import frappe
@@ -37,8 +41,10 @@ def execute():
 		frappe.db.set_value(
 			"File",
 			row.name,
-			"s3_object_key",
-			row.content_hash,
+			{
+				"s3_object_key": row.content_hash,
+				"content_hash": None,
+			},
 			update_modified=False,
 		)
 

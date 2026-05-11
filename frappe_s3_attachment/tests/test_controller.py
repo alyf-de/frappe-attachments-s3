@@ -1,5 +1,4 @@
 import re
-import unittest
 import urllib.parse
 from unittest.mock import MagicMock, patch
 
@@ -262,9 +261,10 @@ class TestControllerCharacterization(FrappeTestCase):
 		set_value.assert_called_once_with("Website Settings", "Website Settings", "brand_image", doc.file_url)
 		self.assertEqual(doc.file_url, "https://s3.local/test-bucket/shop/path/logo.png")
 		self.assertEqual(doc.s3_object_key, "shop/path/logo.png")
+		self.assertIsNone(doc.content_hash)
 		update_sql, update_params = db_sql.call_args.args
 		self.assertIn("s3_object_key=", update_sql)
-		self.assertNotIn("content_hash=", update_sql)
+		self.assertIn("content_hash=NULL", "".join(update_sql.split()))
 		self.assertEqual(update_params[3], "shop/path/logo.png")
 
 	def test_delete_from_cloud_uses_s3_object_key(self):
@@ -410,7 +410,7 @@ _PERM_TEST_USER = "s3_attach_perm_test@test.local"
 
 
 class TestGenerateFilePermissions(FrappeTestCase):
-	"""Gate generate_file behind File read permission (content_hash → File row)."""
+	"""Gate generate_file behind File read permission (s3_object_key → File row)."""
 
 	def setUp(self):
 		super().setUp()
@@ -489,19 +489,14 @@ class TestGenerateFilePermissions(FrappeTestCase):
 
 
 class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
-	"""Regression marker for alyf-de/frappe-attachments-s3#12.
+	"""Regression for alyf-de/frappe-attachments-s3#12.
 
-	Frappe core's File.save_file does duplicate detection by content_hash.
-	When the existing duplicate row's file_url is our private generate_file
-	endpoint, core's File.exists_on_disk -> get_full_path throws
-	"Cannot access file path ..." because the URL prefix is neither http(s)
-	nor an on-disk path.
+	After an S3 private upload, ``content_hash`` is cleared so core
+	``save_file`` duplicate detection does not match a prior S3-backed row and
+	walk ``exists_on_disk`` for a ``/api/method/...`` URL.
 
-	The test encodes the desired healthy behavior (two private uploads with
-	byte-identical content do not crash) and is marked expectedFailure: it
-	currently passes as 'expected failure'. Once the fix lands (DocType
-	override or URL_PREFIXES extension, see issue #12), this test will report
-	as 'unexpected success' and the decorator must be removed.
+	This test simulates that post-upload row state (hook patched) and asserts a
+	second private upload with identical bytes succeeds.
 	"""
 
 	_PRIVATE_API_URL = (
@@ -531,7 +526,6 @@ class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
 			frappe.db.commit()
 		super().tearDown()
 
-	@unittest.expectedFailure
 	def test_two_private_uploads_with_same_content_do_not_crash(self):
 		content = "duplicate-private-content-#12"
 
@@ -545,23 +539,19 @@ class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
 		).insert()
 		self._created.append(first.name)
 
-		# Simulate the post-upload state: bytes live on S3, file_url points
-		# at our private generate_file endpoint, content_hash stays as the
-		# real SHA256 that core computed on insert.
+		# Simulate post-upload state: S3 hook clears content_hash (see controller).
 		frappe.db.set_value(
 			"File",
 			first.name,
 			{
 				"file_url": self._PRIVATE_API_URL,
 				"s3_object_key": "fake/2026/05/08/File/AAAAAAAA_seed.txt",
+				"content_hash": None,
 			},
 			update_modified=False,
 		)
 		frappe.db.commit()
 
-		# With the bug present, this insert raises inside core's
-		# File.save_file -> exists_on_disk -> get_full_path because
-		# /api/method/... is not in URL_PREFIXES.
 		second = frappe.get_doc(
 			{
 				"doctype": "File",
@@ -574,5 +564,6 @@ class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
 
 		first_hash = frappe.db.get_value("File", first.name, "content_hash")
 		second_hash = frappe.db.get_value("File", second.name, "content_hash")
-		self.assertTrue(first_hash)
-		self.assertEqual(first_hash, second_hash)
+		self.assertIsNone(first_hash)
+		self.assertTrue(second_hash)
+		self.assertNotEqual(first_hash, second_hash)
