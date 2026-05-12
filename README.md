@@ -42,6 +42,7 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 | **Upload hook exposure** | `file_upload_to_s3` was whitelisted like other helpers. | Hook is **not** whitelisted; only intentional API entry points (e.g. `generate_file`, `migrate_existing_files`) remain exposed. |
 | **Credentials** | Typical upstream installs used plain **Data** for secrets. | _Secret Key_ uses **Password**; reads use `get_password`. |
 | **Quality / CI** | Minimal upstream tooling. | Ruff, pre-commit, Semgrep (Frappe rules), commitlint, GitHub Actions server tests (`bench run-tests` with MariaDB/Redis), vulnerable-dependency check (`pip-audit`), CodeQL, Dependabot. |
+| **Object key generation (`key_generator`)** | ``s3_key_generator`` hook wrapped in a bare ``except`` (silent failure); dead ``doc_path`` branch; hook return normalized with ``lstrip("/").rstrip("/")`` only. | Hook errors log via ``frappe.logger("frappe_s3_attachment").error(..., exc_info=True)`` then fall back to the default key; dead ``doc_path`` path removed; hook return normalized with ``frappe.cstr`` and ``strip("/")``; falsy or slash-only hook results log a **warning** and fall back; hook keys are **not** passed through ``strip_special_chars`` (the site hook owns key shape). |
 
 **Git anchors** (rebases and whitespace-heavy diffs):
 
@@ -107,6 +108,26 @@ When `RUN_MINIO_INTEGRATION_TESTS` is unset (or not `"1"`), these tests are skip
 2. Enter _Bucket Name_, _Access Key_, _Secret Key_, _S3 Bucket Region Name_, optional _Endpoint URL_ (must be `https://` if set), and _Folder Name_ as needed. _Folder Name_ is the default prefix inside the bucket for generated keys.
 3. Use _Migrate Existing Files_ to upload files that still live under `sites/<site>/public` and `private` folders into the bucket.
 4. Enable _Delete file from cloud_ if removed **File** rows should delete the corresponding S3 object.
+
+#### Custom S3 object keys (`s3_key_generator`)
+
+To replace the default `{folder}/{year}/{month}/{day}/{doctype}/{random}_{filename}` layout, register Frappe’s **`s3_key_generator`** hook in your custom app’s `hooks.py` (only the **first** dotted path in the merged hook list is used):
+
+```python
+# hooks.py (your app)
+s3_key_generator = ["my_app.s3_keys.build_object_key"]
+```
+
+```python
+# my_app/s3_keys.py
+def build_object_key(file_name, parent_doctype, parent_name):
+    # Return a non-empty str (or str-like value); leading/trailing "/" are stripped for you.
+    # Return None or "" to defer to the built-in layout from frappe_s3_attachment (warning logged).
+    return f"my-prefix/{parent_doctype}/{parent_name}/{file_name}"
+```
+
+- **Contract:** Your callable is invoked with keyword arguments ``file_name``, ``parent_doctype``, and ``parent_name`` (same names the controller passes). Define matching parameter names (or ``**kwargs``). Return a **valid S3 key** (UTF-8 string; no leading slash). The implementation does **not** run the default path’s `strip_special_chars` on hook output—you own delimiter safety and character choices.
+- **Fallback:** Uncaught exceptions are logged at **error** level with a traceback, then the built-in layout is used. A falsy return, or a value that is empty after stripping slashes, logs a **warning** and falls back to the built-in layout.
 
 #### License
 

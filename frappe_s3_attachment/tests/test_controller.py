@@ -106,6 +106,76 @@ class TestControllerCharacterization(FrappeTestCase):
 				key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
 		self.assertEqual(key, "custom/path/foo")
 
+	def test_key_generator_hook_bytes_return_decoded(self):
+		with patch(
+			"frappe_s3_attachment.controller.frappe.get_hooks", return_value={"s3_key_generator": ["x.y.z"]}
+		):
+			with patch("frappe_s3_attachment.controller.frappe.get_attr") as get_attr:
+				get_attr.return_value = lambda **kwargs: b"custom/path/from-bytes/"
+				s3 = controller.S3Operations()
+				key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
+		self.assertEqual(key, "custom/path/from-bytes")
+
+	def test_key_generator_hook_exception_logs_and_falls_back(self):
+		with patch(
+			"frappe_s3_attachment.controller.frappe.get_hooks", return_value={"s3_key_generator": ["x.y.z"]}
+		):
+			with patch("frappe_s3_attachment.controller.frappe.get_attr") as get_attr:
+
+				def _boom(**kwargs):
+					raise RuntimeError("hook failed")
+
+				get_attr.return_value = _boom
+				mock_log = MagicMock()
+				with patch(
+					"frappe_s3_attachment.controller.frappe.logger", return_value=MagicMock(error=mock_log)
+				):
+					s3 = controller.S3Operations()
+					key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
+		self.assertRegex(
+			key,
+			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[A-Z0-9]{8}_invoice\.pdf$",
+		)
+		mock_log.assert_called_once()
+		call_kw = mock_log.call_args.kwargs
+		self.assertTrue(call_kw.get("exc_info"))
+
+	def test_key_generator_hook_only_slashes_falls_back(self):
+		with patch(
+			"frappe_s3_attachment.controller.frappe.get_hooks", return_value={"s3_key_generator": ["x.y.z"]}
+		):
+			with patch("frappe_s3_attachment.controller.frappe.get_attr") as get_attr:
+				get_attr.return_value = lambda **kwargs: "///"
+				mock_warn = MagicMock()
+				with patch(
+					"frappe_s3_attachment.controller.frappe.logger", return_value=MagicMock(warning=mock_warn)
+				):
+					s3 = controller.S3Operations()
+					key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
+		self.assertRegex(
+			key,
+			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[A-Z0-9]{8}_invoice\.pdf$",
+		)
+		mock_warn.assert_called_once()
+
+	def test_key_generator_hook_empty_return_logs_warning_and_falls_back(self):
+		with patch(
+			"frappe_s3_attachment.controller.frappe.get_hooks", return_value={"s3_key_generator": ["x.y.z"]}
+		):
+			with patch("frappe_s3_attachment.controller.frappe.get_attr") as get_attr:
+				get_attr.return_value = lambda **kwargs: ""
+				mock_warn = MagicMock()
+				with patch(
+					"frappe_s3_attachment.controller.frappe.logger", return_value=MagicMock(warning=mock_warn)
+				):
+					s3 = controller.S3Operations()
+					key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
+		self.assertRegex(
+			key,
+			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[A-Z0-9]{8}_invoice\.pdf$",
+		)
+		mock_warn.assert_called_once()
+
 	def test_is_ignored_doctype_true_for_configured_rows(self):
 		self.settings.ignored_doctypes = [
 			frappe._dict({"doctype_name": "Sales Invoice"}),
@@ -141,10 +211,11 @@ class TestControllerCharacterization(FrappeTestCase):
 		upload_fn.assert_not_called()
 		doc.exists_on_disk.assert_called_once_with()
 
-	def test_migrate_existing_files_skips_https_urls(self):
-		"""``https:`` rows are skipped by regex before ``get_doc``; local rows upload when on disk."""
+	def test_migrate_existing_files_skips_remote_http_urls(self):
+		"""``http:`` / ``https:`` rows are skipped by regex before ``get_doc``; local rows upload when on disk."""
 		rows = [
 			{"name": "F-HTTPS", "file_url": "https://other.example/x.bin"},
+			{"name": "F-HTTP", "file_url": "http://legacy.example/x.bin"},
 			{"name": "F-LOCAL", "file_url": "/files/y.txt"},
 		]
 		local_doc = MagicMock()
@@ -335,6 +406,7 @@ class TestControllerCharacterization(FrappeTestCase):
 
 	def test_s3_file_regex_match_accepts_public_and_private_urls(self):
 		self.assertTrue(controller._s3_file_regex_match("https://fsn1.your-objectstorage.com/bucket/key"))
+		self.assertTrue(controller._s3_file_regex_match("http://127.0.0.1:9000/bucket/key"))
 		self.assertTrue(
 			controller._s3_file_regex_match(
 				"/api/method/frappe_s3_attachment.controller.generate_file?key=abc&file_name=test.pdf"
