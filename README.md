@@ -3,7 +3,7 @@
 Frappe app to make file upload automatically upload and read from S3.  
 Maintained as a fork of [zerodha/frappe-attachments-s3](https://github.com/zerodha/frappe-attachments-s3) under [alyf-de/frappe-attachments-s3](https://github.com/alyf-de/frappe-attachments-s3).
 
-The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, a dedicated **File** `s3_object_key` locator field with automatic install/migrate setup, characterization and TDD tests, and tagged release **v0.2.0**. Optional next steps include a consolidated **v16** forward-compatibility pass and further hardening—not required for normal installs.
+The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, a dedicated **File** `s3_object_key` locator field with automatic install/migrate setup, characterization and TDD tests, and tagged releases **v0.2.0** / **v0.2.1**. Optional next steps include a consolidated **v16** forward-compatibility pass and further hardening—not required for normal installs.
 
 #### Features
 
@@ -12,19 +12,19 @@ The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filena
 3. Configure credentials and bucket settings from Desk (**S3 File Attachment** singleton): _Bucket Name_, _Access Key_, _Secret Key_ (stored as **Password**), _S3 Bucket Region Name_, optional _Endpoint URL_ for S3-compatible providers, _Folder Name_, and migration of existing files.
 4. Delete objects in S3 when the **File** document is removed in Desk when _Delete file from cloud_ is enabled.
 5. Files are stored under `{folder}/{year}/{month}/{day}/{doctype}/{random}_{filename}` (see _Folder Name_).
-6. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** remains skipped by default.
+6. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** is listed there by default (patch **v0.2.1** backfills the row on migrate if missing; you may remove it to allow **Data Import** files on S3).
 
 #### Installation
 
 1. `bench get-app https://github.com/alyf-de/frappe-attachments-s3 --branch version-15`
 2. `bench install-app frappe_s3_attachment`
 
-To pin an exact revision, checkout tag [`v0.2.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.0) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
+To pin an exact revision, checkout tag [`v0.2.1`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.1) (or [`v0.2.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.0)) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 #### Branches
 
 - `develop`: default branch; upstream rebases and feature work land here first.
-- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.2.0**).
+- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.2.1**).
 - `version-16`: to be created at v16 cutover.
 
 #### Changes vs upstream
@@ -38,7 +38,7 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 | **MIME / content type** | Uses **`python-magic`** (`magic.from_file`) to pick `ContentType` for the S3 upload. | Uses **`filetype`** (`filetype.guess`) with a `mimetypes.guess_type` fallback—no `libmagic` dependency and aligned with how newer Frappe versions sniff types. |
 | **S3 object key storage** | Stored the S3 object key in the core **File** `content_hash` field, conflicting with Frappe's content-identity / dedupe semantics and risking column-length issues for long keys. | Stores the key in a dedicated **File** custom field `s3_object_key` (Data, length 255, read-only and visible in the Desk for audit, indexed with prefix 191 on MariaDB) ensured automatically on install/migrate; an idempotent backfill patch copies legacy values from `content_hash`. After upload, **File** `content_hash` is cleared so core duplicate detection does not apply to S3-backed rows (same practical outcome as for remote URLs; see [issue #12](https://github.com/alyf-de/frappe-attachments-s3/issues/12)). |
 | **`generate_file` (signed URL)** | Any authenticated caller could request a presigned URL if they knew or guessed the object key (key stored in **File** `content_hash`). | Resolves the **File** row by `s3_object_key`, runs **`check_permission('read')`** on that **File**, then redirects; missing row raises **Does Not Exist** (404). |
-| **Ignored DocTypes** | Effectively a fixed skip list (e.g. **Data Import**). | Child table **S3 Ignored DocType Row** on the singleton to add more parent DocTypes; **Data Import** is still always ignored. |
+| **Ignored DocTypes** | Effectively a fixed skip list (e.g. **Data Import**). | Child table **S3 Ignored DocType Row** on the singleton; **Data Import** is seeded by default and can be removed if you want those files on S3. |
 | **Upload hook exposure** | `file_upload_to_s3` was whitelisted like other helpers. | Hook is **not** whitelisted; only intentional API entry points (e.g. `generate_file`, `migrate_existing_files`) remain exposed. |
 | **Credentials** | Typical upstream installs used plain **Data** for secrets. | _Secret Key_ uses **Password**; reads use `get_password`. |
 | **Quality / CI** | Minimal upstream tooling. | Ruff, pre-commit, Semgrep (Frappe rules), commitlint, GitHub Actions server tests (`bench run-tests` with MariaDB/Redis), vulnerable-dependency check (`pip-audit`), CodeQL, Dependabot. |
@@ -52,7 +52,7 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 git diff b595155..HEAD -- path/to/file.py
 ```
 
-**Current release**: [`v0.2.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.0) — see [CHANGELOG.md](CHANGELOG.md).
+**Current release**: [`v0.2.1`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.1) — see [CHANGELOG.md](CHANGELOG.md).
 
 #### Known limitations
 
