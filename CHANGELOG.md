@@ -14,11 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Ignored parent DocTypes for S3 upload are read only from the **S3 File Attachment** child table (administrators may remove **Data Import** to allow those files on S3).
-- **`migrate_existing_files`** loads **File** candidates with non-empty **`file_url`**, skips rows whose URL already looks off-local (``https:`` or this app’s **`generate_file`** endpoint), checks **`File.exists_on_disk()`** before upload, and calls **`file_upload_to_s3`** so migration matches the insert hook (ignore list, ``attached_to_doctype`` fallback, parent **`image_field`**).
+- **`migrate_existing_files`** loads **File** candidates with non-empty **`file_url`**, skips rows whose URL already looks off-local (``http:``/``https:`` URLs or this app’s **`generate_file`** API path), checks **`File.exists_on_disk()`** before upload, and calls **`file_upload_to_s3`** so migration matches the insert hook (ignore list, ``attached_to_doctype`` fallback, parent **`image_field`**).
+- **`s3_key_generator`** hook integration normalises return values (**`frappe.cstr`**, strip leading slashes), logs hook failures with stack traces instead of a bare ``except``, warns and falls back when the hook yields no usable key, and drops the unused legacy **`doc_path`** call shape; README documents the hook contract (#17).
+- README distinguishes production **Endpoint URL** values using **`https://`** from local MinIO tests served over **`http://`** (#14).
 
 ### Fixed
 
 - Private **File** rows migrated to S3 use the same **`generate_file`** query string as new uploads (including **`file_name`**) so presigned download filenames stay consistent.
+
+### Removed
+
+- Stale **`doctype_list_js`** hook registration (wrong DocType name and asset path); **S3 File Attachment** Desk behaviour is unchanged because the co-located client script already loads (#13).
 
 ## [0.2.0] - 2026-05-08
 
