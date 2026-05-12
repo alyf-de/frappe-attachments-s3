@@ -5,6 +5,21 @@ All notable changes to this fork are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-05-12
+
+### Added
+
+- Patch `v0_2_1.ensure_data_import_ignored_doctype` appends **Data Import** to **S3 File Attachment** *Ignored DocTypes* when missing, so upgraded sites match fresh installs without controller-side forcing.
+
+### Changed
+
+- Ignored parent DocTypes for S3 upload are read only from the **S3 File Attachment** child table (administrators may remove **Data Import** to allow those files on S3).
+- **`migrate_existing_files`** loads **File** candidates with non-empty **`file_url`**, skips rows whose URL already looks off-local (``https:`` or this app’s **`generate_file`** endpoint), checks **`File.exists_on_disk()`** before upload, and calls **`file_upload_to_s3`** so migration matches the insert hook (ignore list, ``attached_to_doctype`` fallback, parent **`image_field`**).
+
+### Fixed
+
+- Private **File** rows migrated to S3 use the same **`generate_file`** query string as new uploads (including **`file_name`**) so presigned download filenames stay consistent.
+
 ## [0.2.0] - 2026-05-08
 
 ### Added
@@ -68,3 +83,4 @@ Initial ALYF fork release on `version-15` and `develop`, including all changes s
 [0.1.0]: https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.1.0
 [0.1.1]: https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.1.1
 [0.2.0]: https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.0
+[0.2.1]: https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.1

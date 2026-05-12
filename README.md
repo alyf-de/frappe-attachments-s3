@@ -3,7 +3,7 @@
 Frappe app to make file upload automatically upload and read from S3.  
 Maintained as a fork of [zerodha/frappe-attachments-s3](https://github.com/zerodha/frappe-attachments-s3) under [alyf-de/frappe-attachments-s3](https://github.com/alyf-de/frappe-attachments-s3).
 
-The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, a dedicated **File** `s3_object_key` locator field with automatic install/migrate setup, characterization and TDD tests, and tagged release **v0.2.0**. Optional next steps include a consolidated **v16** forward-compatibility pass and further hardening—not required for normal installs.
+The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, a dedicated **File** `s3_object_key` locator field with automatic install/migrate setup, characterization and TDD tests, and tagged releases **v0.2.0** / **v0.2.1**. Optional next steps include a consolidated **v16** forward-compatibility pass and further hardening—not required for normal installs.
 
 #### Features
 
@@ -12,19 +12,19 @@ The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filena
 3. Configure credentials and bucket settings from Desk (**S3 File Attachment** singleton): _Bucket Name_, _Access Key_, _Secret Key_ (stored as **Password**), _S3 Bucket Region Name_, optional _Endpoint URL_ for S3-compatible providers, _Folder Name_, and migration of existing files.
 4. Delete objects in S3 when the **File** document is removed in Desk when _Delete file from cloud_ is enabled.
 5. Files are stored under `{folder}/{year}/{month}/{day}/{doctype}/{random}_{filename}` (see _Folder Name_).
-6. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** remains skipped by default.
+6. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** is listed there by default (patch **v0.2.1** backfills the row on migrate if missing; you may remove it to allow **Data Import** files on S3).
 
 #### Installation
 
 1. `bench get-app https://github.com/alyf-de/frappe-attachments-s3 --branch version-15`
 2. `bench install-app frappe_s3_attachment`
 
-To pin an exact revision, checkout tag [`v0.2.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.0) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
+To pin an exact revision, checkout tag [`v0.2.1`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.1) (or [`v0.2.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.0)) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 #### Branches
 
 - `develop`: default branch; upstream rebases and feature work land here first.
-- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.2.0**).
+- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.2.1**).
 - `version-16`: to be created at v16 cutover.
 
 #### Changes vs upstream
@@ -38,10 +38,11 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 | **MIME / content type** | Uses **`python-magic`** (`magic.from_file`) to pick `ContentType` for the S3 upload. | Uses **`filetype`** (`filetype.guess`) with a `mimetypes.guess_type` fallback—no `libmagic` dependency and aligned with how newer Frappe versions sniff types. |
 | **S3 object key storage** | Stored the S3 object key in the core **File** `content_hash` field, conflicting with Frappe's content-identity / dedupe semantics and risking column-length issues for long keys. | Stores the key in a dedicated **File** custom field `s3_object_key` (Data, length 255, read-only and visible in the Desk for audit, indexed with prefix 191 on MariaDB) ensured automatically on install/migrate; an idempotent backfill patch copies legacy values from `content_hash`. After upload, **File** `content_hash` is cleared so core duplicate detection does not apply to S3-backed rows (same practical outcome as for remote URLs; see [issue #12](https://github.com/alyf-de/frappe-attachments-s3/issues/12)). |
 | **`generate_file` (signed URL)** | Any authenticated caller could request a presigned URL if they knew or guessed the object key (key stored in **File** `content_hash`). | Resolves the **File** row by `s3_object_key`, runs **`check_permission('read')`** on that **File**, then redirects; missing row raises **Does Not Exist** (404). |
-| **Ignored DocTypes** | Effectively a fixed skip list (e.g. **Data Import**). | Child table **S3 Ignored DocType Row** on the singleton to add more parent DocTypes; **Data Import** is still always ignored. |
+| **Ignored DocTypes** | Effectively a fixed skip list (e.g. **Data Import**). | Child table **S3 Ignored DocType Row** on the singleton; **Data Import** is seeded by default and can be removed if you want those files on S3. |
 | **Upload hook exposure** | `file_upload_to_s3` was whitelisted like other helpers. | Hook is **not** whitelisted; only intentional API entry points (e.g. `generate_file`, `migrate_existing_files`) remain exposed. |
 | **Credentials** | Typical upstream installs used plain **Data** for secrets. | _Secret Key_ uses **Password**; reads use `get_password`. |
 | **Quality / CI** | Minimal upstream tooling. | Ruff, pre-commit, Semgrep (Frappe rules), commitlint, GitHub Actions server tests (`bench run-tests` with MariaDB/Redis), vulnerable-dependency check (`pip-audit`), CodeQL, Dependabot. |
+| **Object key generation (`key_generator`)** | ``s3_key_generator`` hook wrapped in a bare ``except`` (silent failure); dead ``doc_path`` branch; hook return normalized with ``lstrip("/").rstrip("/")`` only. | Hook errors log via ``frappe.logger("frappe_s3_attachment").error(..., exc_info=True)`` then fall back to the default key; dead ``doc_path`` path removed; hook return normalized with ``frappe.cstr`` and ``strip("/")``; falsy or slash-only hook results log a **warning** and fall back; hook keys are **not** passed through ``strip_special_chars`` (the site hook owns key shape). |
 
 **Git anchors** (rebases and whitespace-heavy diffs):
 
@@ -52,7 +53,7 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 git diff b595155..HEAD -- path/to/file.py
 ```
 
-**Current release**: [`v0.2.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.0) — see [CHANGELOG.md](CHANGELOG.md).
+**Current release**: [`v0.2.1`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.1) — see [CHANGELOG.md](CHANGELOG.md).
 
 #### Known limitations
 
@@ -63,6 +64,8 @@ These match upstream unless noted; further hardening is tracked as follow-up wor
 Optional automation backlog: v16 compatibility audit (test base classes, explicit **boto3** pin).
 
 #### MinIO integration tests
+
+**S3 File Attachment** validates _Endpoint URL_ as **HTTPS-only** in Desk (TLS for real object stores such as Hetzner). The `http://127.0.0.1:9000` value in the commands below is **for these tests only**: settings come from environment variables and are not saved through the form. Pasting the same URL into Desk will fail validation; use MinIO behind HTTPS (for example a local reverse proxy) for a working Desk setup.
 
 The integration suite in `frappe_s3_attachment/tests/test_minio_integration.py` is opt-in and runs only when `RUN_MINIO_INTEGRATION_TESTS=1`.
 
@@ -102,9 +105,29 @@ When `RUN_MINIO_INTEGRATION_TESTS` is unset (or not `"1"`), these tests are skip
 #### Desk configuration
 
 1. Open the **S3 File Attachment** single.
-2. Enter _Bucket Name_, _Access Key_, _Secret Key_, _S3 Bucket Region Name_, optional _Endpoint URL_, and _Folder Name_ as needed. _Folder Name_ is the default prefix inside the bucket for generated keys.
+2. Enter _Bucket Name_, _Access Key_, _Secret Key_, _S3 Bucket Region Name_, optional _Endpoint URL_ (must be `https://` if set), and _Folder Name_ as needed. _Folder Name_ is the default prefix inside the bucket for generated keys.
 3. Use _Migrate Existing Files_ to upload files that still live under `sites/<site>/public` and `private` folders into the bucket.
 4. Enable _Delete file from cloud_ if removed **File** rows should delete the corresponding S3 object.
+
+#### Custom S3 object keys (`s3_key_generator`)
+
+To replace the default `{folder}/{year}/{month}/{day}/{doctype}/{random}_{filename}` layout, register Frappe’s **`s3_key_generator`** hook in your custom app’s `hooks.py` (only the **first** dotted path in the merged hook list is used):
+
+```python
+# hooks.py (your app)
+s3_key_generator = ["my_app.s3_keys.build_object_key"]
+```
+
+```python
+# my_app/s3_keys.py
+def build_object_key(file_name, parent_doctype, parent_name):
+    # Return a non-empty str (or str-like value); leading/trailing "/" are stripped for you.
+    # Return None or "" to defer to the built-in layout from frappe_s3_attachment (warning logged).
+    return f"my-prefix/{parent_doctype}/{parent_name}/{file_name}"
+```
+
+- **Contract:** Your callable is invoked with keyword arguments ``file_name``, ``parent_doctype``, and ``parent_name`` (same names the controller passes). Define matching parameter names (or ``**kwargs``). Return a **valid S3 key** (UTF-8 string; no leading slash). The implementation does **not** run the default path’s `strip_special_chars` on hook output—you own delimiter safety and character choices.
+- **Fallback:** Uncaught exceptions are logged at **error** level with a traceback, then the built-in layout is used. A falsy return, or a value that is empty after stripping slashes, logs a **warning** and falls back to the built-in layout.
 
 #### License
 

@@ -1,1 +1,2 @@
 frappe_s3_attachment.patches.v0_2_0.backfill_s3_object_key
+frappe_s3_attachment.patches.v0_2_1.ensure_data_import_ignored_doctype

@@ -106,12 +106,133 @@ class TestControllerCharacterization(FrappeTestCase):
 				key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
 		self.assertEqual(key, "custom/path/foo")
 
-	def test_get_ignored_doctypes_includes_default_and_configured_values(self):
-		self.settings.ignored_doctypes = [frappe._dict({"doctype_name": "Sales Invoice"})]
+	def test_key_generator_hook_bytes_return_decoded(self):
+		with patch(
+			"frappe_s3_attachment.controller.frappe.get_hooks", return_value={"s3_key_generator": ["x.y.z"]}
+		):
+			with patch("frappe_s3_attachment.controller.frappe.get_attr") as get_attr:
+				get_attr.return_value = lambda **kwargs: b"custom/path/from-bytes/"
+				s3 = controller.S3Operations()
+				key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
+		self.assertEqual(key, "custom/path/from-bytes")
+
+	def test_key_generator_hook_exception_logs_and_falls_back(self):
+		with patch(
+			"frappe_s3_attachment.controller.frappe.get_hooks", return_value={"s3_key_generator": ["x.y.z"]}
+		):
+			with patch("frappe_s3_attachment.controller.frappe.get_attr") as get_attr:
+
+				def _boom(**kwargs):
+					raise RuntimeError("hook failed")
+
+				get_attr.return_value = _boom
+				mock_log = MagicMock()
+				with patch(
+					"frappe_s3_attachment.controller.frappe.logger", return_value=MagicMock(error=mock_log)
+				):
+					s3 = controller.S3Operations()
+					key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
+		self.assertRegex(
+			key,
+			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[A-Z0-9]{8}_invoice\.pdf$",
+		)
+		mock_log.assert_called_once()
+		call_kw = mock_log.call_args.kwargs
+		self.assertTrue(call_kw.get("exc_info"))
+
+	def test_key_generator_hook_only_slashes_falls_back(self):
+		with patch(
+			"frappe_s3_attachment.controller.frappe.get_hooks", return_value={"s3_key_generator": ["x.y.z"]}
+		):
+			with patch("frappe_s3_attachment.controller.frappe.get_attr") as get_attr:
+				get_attr.return_value = lambda **kwargs: "///"
+				mock_warn = MagicMock()
+				with patch(
+					"frappe_s3_attachment.controller.frappe.logger", return_value=MagicMock(warning=mock_warn)
+				):
+					s3 = controller.S3Operations()
+					key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
+		self.assertRegex(
+			key,
+			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[A-Z0-9]{8}_invoice\.pdf$",
+		)
+		mock_warn.assert_called_once()
+
+	def test_key_generator_hook_empty_return_logs_warning_and_falls_back(self):
+		with patch(
+			"frappe_s3_attachment.controller.frappe.get_hooks", return_value={"s3_key_generator": ["x.y.z"]}
+		):
+			with patch("frappe_s3_attachment.controller.frappe.get_attr") as get_attr:
+				get_attr.return_value = lambda **kwargs: ""
+				mock_warn = MagicMock()
+				with patch(
+					"frappe_s3_attachment.controller.frappe.logger", return_value=MagicMock(warning=mock_warn)
+				):
+					s3 = controller.S3Operations()
+					key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
+		self.assertRegex(
+			key,
+			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[A-Z0-9]{8}_invoice\.pdf$",
+		)
+		mock_warn.assert_called_once()
+
+	def test_is_ignored_doctype_true_for_configured_rows(self):
+		self.settings.ignored_doctypes = [
+			frappe._dict({"doctype_name": "Sales Invoice"}),
+			frappe._dict({"doctype_name": "Data Import"}),
+		]
 		s3 = controller.S3Operations()
-		ignored_doctypes = s3.get_ignored_doctypes()
-		self.assertIn("Data Import", ignored_doctypes)
-		self.assertIn("Sales Invoice", ignored_doctypes)
+		self.assertTrue(s3.is_ignored_doctype("Sales Invoice"))
+		self.assertTrue(s3.is_ignored_doctype("Data Import"))
+		self.assertFalse(s3.is_ignored_doctype("Customer"))
+
+	def test_is_ignored_doctype_false_when_child_table_empty(self):
+		self.settings.ignored_doctypes = []
+		s3 = controller.S3Operations()
+		self.assertFalse(s3.is_ignored_doctype("Data Import"))
+
+	def test_migrate_existing_files_no_rows_does_not_call_upload(self):
+		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=[]):
+			with patch("frappe_s3_attachment.controller.frappe.get_doc") as get_doc_fn:
+				with patch("frappe_s3_attachment.controller.file_upload_to_s3") as upload_fn:
+					controller.migrate_existing_files()
+		get_doc_fn.assert_not_called()
+		upload_fn.assert_not_called()
+
+	def test_migrate_existing_files_skips_when_not_on_disk(self):
+		rows = [{"name": "F-1", "file_url": "/files/x.txt"}]
+		doc = MagicMock()
+		doc.exists_on_disk.return_value = False
+		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=rows):
+			with patch("frappe_s3_attachment.controller.frappe.get_doc", return_value=doc) as get_doc_fn:
+				with patch("frappe_s3_attachment.controller.file_upload_to_s3") as upload_fn:
+					controller.migrate_existing_files()
+		get_doc_fn.assert_called_once_with("File", "F-1")
+		upload_fn.assert_not_called()
+		doc.exists_on_disk.assert_called_once_with()
+
+	def test_migrate_existing_files_skips_remote_http_urls(self):
+		"""``http:`` / ``https:`` rows are skipped by regex before ``get_doc``; local rows upload when on disk."""
+		rows = [
+			{"name": "F-HTTPS", "file_url": "https://other.example/x.bin"},
+			{"name": "F-HTTP", "file_url": "http://legacy.example/x.bin"},
+			{"name": "F-LOCAL", "file_url": "/files/y.txt"},
+		]
+		local_doc = MagicMock()
+		local_doc.exists_on_disk.return_value = True
+		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=rows) as get_all_fn:
+			with patch(
+				"frappe_s3_attachment.controller.frappe.get_doc", return_value=local_doc
+			) as get_doc_fn:
+				with patch("frappe_s3_attachment.controller.file_upload_to_s3") as upload_fn:
+					controller.migrate_existing_files()
+		get_all_fn.assert_called_once_with(
+			"File",
+			fields=["name", "file_url"],
+			filters=[["file_url", "is", "set"], ["file_url", "!=", ""]],
+		)
+		get_doc_fn.assert_called_once_with("File", "F-LOCAL")
+		upload_fn.assert_called_once_with(local_doc, "migrate_existing_files")
 
 	def test_upload_public_sets_acl_public_read(self):
 		with patch(
@@ -192,45 +313,27 @@ class TestControllerCharacterization(FrappeTestCase):
 		s3.delete_from_s3("key-1")
 		self.mock_s3_client.delete_object.assert_called_once_with(Bucket="test-bucket", Key="key-1")
 
-	def test_file_upload_to_s3_skips_ignored_doctype(self):
-		doc = frappe._dict(
-			{
-				"name": "FILE-TEST-1",
-				"file_url": "/private/files/my.pdf",
-				"attached_to_doctype": "Data Import",
-				"attached_to_name": "DI-0001",
-				"file_name": "my.pdf",
-				"is_private": 1,
-			}
-		)
-		mock_s3_ops = MagicMock()
-		mock_s3_ops.get_ignored_doctypes.return_value = {"Data Import"}
-		mock_s3_class = MagicMock(return_value=mock_s3_ops)
-		with patch("frappe_s3_attachment.controller.S3Operations", mock_s3_class):
-			controller.file_upload_to_s3(doc, "after_insert")
+	def test_file_upload_to_s3_skips_upload_when_parent_doctype_is_ignored(self):
+		for ignored_dt in ("Data Import", "Sales Invoice"):
+			with self.subTest(ignored_doctype=ignored_dt):
+				doc = frappe._dict(
+					{
+						"name": f"FILE-IGNORE-{ignored_dt}",
+						"file_url": "/private/files/my.pdf",
+						"attached_to_doctype": ignored_dt,
+						"attached_to_name": "REF-1",
+						"file_name": "my.pdf",
+						"is_private": 1,
+					}
+				)
+				mock_s3_ops = MagicMock()
+				mock_s3_ops.is_ignored_doctype.side_effect = lambda dt: dt == ignored_dt
+				mock_s3_class = MagicMock(return_value=mock_s3_ops)
+				with patch("frappe_s3_attachment.controller.S3Operations", mock_s3_class):
+					controller.file_upload_to_s3(doc, "after_insert")
 
-		mock_s3_ops.upload_files_to_s3_with_key.assert_not_called()
-		self.assertEqual(doc.file_url, "/private/files/my.pdf")
-
-	def test_file_upload_to_s3_skips_configured_ignored_doctype(self):
-		doc = frappe._dict(
-			{
-				"name": "FILE-TEST-1B",
-				"file_url": "/private/files/my.pdf",
-				"attached_to_doctype": "Sales Invoice",
-				"attached_to_name": "SINV-0001",
-				"file_name": "my.pdf",
-				"is_private": 1,
-			}
-		)
-		mock_s3_ops = MagicMock()
-		mock_s3_ops.get_ignored_doctypes.return_value = {"Sales Invoice", "Data Import"}
-		mock_s3_class = MagicMock(return_value=mock_s3_ops)
-		with patch("frappe_s3_attachment.controller.S3Operations", mock_s3_class):
-			controller.file_upload_to_s3(doc, "after_insert")
-
-		mock_s3_ops.upload_files_to_s3_with_key.assert_not_called()
-		self.assertEqual(doc.file_url, "/private/files/my.pdf")
+				mock_s3_ops.upload_files_to_s3_with_key.assert_not_called()
+				self.assertEqual(doc.file_url, "/private/files/my.pdf")
 
 	def test_file_upload_to_s3_updates_image_field_when_present(self):
 		doc = frappe._dict(
@@ -244,6 +347,7 @@ class TestControllerCharacterization(FrappeTestCase):
 			}
 		)
 		mock_s3_ops = MagicMock()
+		mock_s3_ops.is_ignored_doctype.return_value = False
 		mock_s3_ops.upload_files_to_s3_with_key.return_value = "shop/path/logo.png"
 		mock_s3_ops.S3_CLIENT.meta.endpoint_url = "https://s3.local"
 		mock_s3_ops.BUCKET = "test-bucket"
@@ -301,13 +405,14 @@ class TestControllerCharacterization(FrappeTestCase):
 		self.assertEqual(filters, {"s3_object_key": "some/s3/key"})
 
 	def test_s3_file_regex_match_accepts_public_and_private_urls(self):
-		self.assertTrue(controller.s3_file_regex_match("https://fsn1.your-objectstorage.com/bucket/key"))
+		self.assertTrue(controller._s3_file_regex_match("https://fsn1.your-objectstorage.com/bucket/key"))
+		self.assertTrue(controller._s3_file_regex_match("http://127.0.0.1:9000/bucket/key"))
 		self.assertTrue(
-			controller.s3_file_regex_match(
+			controller._s3_file_regex_match(
 				"/api/method/frappe_s3_attachment.controller.generate_file?key=abc&file_name=test.pdf"
 			)
 		)
-		self.assertIsNone(controller.s3_file_regex_match("/files/plain-local-file.pdf"))
+		self.assertIsNone(controller._s3_file_regex_match("/files/plain-local-file.pdf"))
 
 
 class TestEndpointUrl(FrappeTestCase):

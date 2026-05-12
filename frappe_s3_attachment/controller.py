@@ -12,6 +12,7 @@ import filetype
 import frappe
 from botocore.client import Config
 from botocore.exceptions import ClientError
+from frappe import _
 
 
 class S3Operations:
@@ -45,74 +46,83 @@ class S3Operations:
 		self.BUCKET = self.s3_settings_doc.bucket_name
 		self.folder_name = self.s3_settings_doc.folder_name
 
-	def get_ignored_doctypes(self):
-		"""Return ignored parent doctypes configured in S3 settings."""
-		configured_ignored = {
+	def is_ignored_doctype(self, parent_doctype: str) -> bool:
+		"""Return whether *Attached To DocType* ``parent_doctype`` is listed on **S3 File Attachment**."""
+		ignored = {
 			row.doctype_name for row in (self.s3_settings_doc.ignored_doctypes or []) if row.doctype_name
 		}
-		# Keep historical default unless explicitly overridden by config.
-		configured_ignored.add("Data Import")
-		return configured_ignored
+		return parent_doctype in ignored
 
 	def strip_special_chars(self, file_name):
 		"""
-		Strips file charachters which doesnt match the regex.
+		Strip characters from *file_name* that do not match the allowed regex.
 		"""
 		regex = re.compile("[^0-9a-zA-Z._-]")
 		file_name = regex.sub("", file_name)
 		return file_name
 
 	def key_generator(self, file_name, parent_doctype, parent_name):
-		"""
-		Generate keys for s3 objects uploaded with file name attached.
+		"""Build the S3 object key used for a new upload.
+
+		Resolution order:
+
+		1. **Hook** — If any app defines the ``s3_key_generator`` hook, the first dotted
+		   path is loaded and called as ``callable(file_name=..., parent_doctype=...,
+		   parent_name=...)``. The return value is coerced with ``frappe.cstr``
+		   (so ``bytes`` are decoded as UTF-8 text, not Python's ``str(bytes)``
+		   repr), leading and trailing ``/`` are stripped, and a non-empty string is
+		   returned as the key. On exception, a log line is emitted with
+		   ``exc_info`` and the built-in layout below is used. If the hook returns a
+		   falsy value or only slashes, a **warning** is logged and the built-in layout
+		   is used.
+		2. **Default** — ``{folder}/{year}/{month}/{day}/{parent_doctype}/{random}_{file_name}``
+		   with ``folder`` omitted when unset; spaces in ``file_name`` become ``_``;
+		   the file-name tail is reduced to ``[0-9a-zA-Z._-]`` via
+		   ``strip_special_chars``.
+
+		Args:
+			file_name: Original **File** *File Name* (hook receives this unchanged).
+			parent_doctype: *Attached To DocType*, or ``"File"`` when the **File** is not linked to a row.
+			parent_name: *Attached To Name* from the **File** row.
+
+		Returns:
+			Object key string (no leading ``/``).
 		"""
 		hook_cmd = frappe.get_hooks().get("s3_key_generator")
 		if hook_cmd:
+			hook_path = hook_cmd[0]
 			try:
-				k = frappe.get_attr(hook_cmd[0])(
+				hook_return = frappe.get_attr(hook_path)(
 					file_name=file_name, parent_doctype=parent_doctype, parent_name=parent_name
 				)
-				if k:
-					return k.rstrip("/").lstrip("/")
-			except:  # noqa: E722  upstream behaviour; revisit in a future TDD slice
-				pass
+				# cstr (as_unicode) handles bytes; str(bytes) would render as b'...' literals.
+				normalised = frappe.cstr(hook_return).strip("/")
+				if normalised:
+					return normalised
+				else:
+					frappe.logger("frappe_s3_attachment").warning(
+						f"s3_key_generator hook {hook_path} returned no usable key after normalisation; using default key layout"
+					)
+			except Exception:
+				frappe.logger("frappe_s3_attachment").error(
+					f"s3_key_generator hook {hook_path} failed; using default key layout",
+					exc_info=True,
+				)
 
 		file_name = file_name.replace(" ", "_")
 		file_name = self.strip_special_chars(file_name)
-		key = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+		prefix = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))
 
 		today = datetime.datetime.now()
 		year = today.strftime("%Y")
 		month = today.strftime("%m")
 		day = today.strftime("%d")
 
-		doc_path = None
-
-		if not doc_path:
-			if self.folder_name:
-				final_key = (
-					self.folder_name
-					+ "/"
-					+ year
-					+ "/"
-					+ month
-					+ "/"
-					+ day
-					+ "/"
-					+ parent_doctype
-					+ "/"
-					+ key
-					+ "_"
-					+ file_name
-				)
-			else:
-				final_key = (
-					year + "/" + month + "/" + day + "/" + parent_doctype + "/" + key + "_" + file_name
-				)
-			return final_key
+		if self.folder_name:
+			key = f"{self.folder_name}/{year}/{month}/{day}/{parent_doctype}/{prefix}_{file_name}"
 		else:
-			final_key = doc_path + "/" + key + "_" + file_name
-			return final_key
+			key = f"{year}/{month}/{day}/{parent_doctype}/{prefix}_{file_name}"
+		return key
 
 	def upload_files_to_s3_with_key(self, file_path, file_name, is_private, parent_doctype, parent_name):
 		"""
@@ -153,7 +163,7 @@ class S3Operations:
 				)
 
 		except boto3.exceptions.S3UploadFailedError:
-			frappe.throw(frappe._("File Upload Failed. Please try again."))
+			frappe.throw(_("File Upload Failed. Please try again."))
 		return key
 
 	def delete_from_s3(self, key):
@@ -162,7 +172,7 @@ class S3Operations:
 			try:
 				self.S3_CLIENT.delete_object(Bucket=self.s3_settings_doc.bucket_name, Key=key)
 			except ClientError:
-				frappe.throw(frappe._("Access denied: Could not delete file"))
+				frappe.throw(_("Access denied: Could not delete file"))
 
 	def read_file_from_s3(self, key):
 		"""
@@ -198,17 +208,25 @@ class S3Operations:
 		return url
 
 
-def file_upload_to_s3(doc, method):
-	"""
-	check and upload files to s3. the path check and
+def file_upload_to_s3(doc, _method):
+	"""Upload a **File** row to S3 after insert.
+
+	``doc_events`` handler: uploads the on-disk file, removes the local copy, updates
+	``file_url`` and ``s3_object_key``, clears ``content_hash``, and may update the
+	parent document's ``image_field`` when the parent **DocType** defines one in Meta.
+	Skips upload when *Attached To DocType* is listed as ignored on **S3 File Attachment**.
+
+	Args:
+		doc: The inserted **File** document.
+		_method (str): Doc event name from Frappe's hook runner (e.g. ``"after_insert"``).
+			Present for the hook calling convention only; unused.
 	"""
 	s3_upload = S3Operations()
 	path = doc.file_url
 	site_path = frappe.utils.get_site_path()
 	parent_doctype = doc.attached_to_doctype or "File"
 	parent_name = doc.attached_to_name
-	ignore_s3_upload_for_doctype = s3_upload.get_ignored_doctypes()
-	if parent_doctype not in ignore_s3_upload_for_doctype:
+	if not s3_upload.is_ignored_doctype(parent_doctype):
 		if not doc.is_private:
 			file_path = site_path + "/public" + path
 		else:
@@ -218,8 +236,8 @@ def file_upload_to_s3(doc, method):
 		)
 
 		if doc.is_private:
-			method = "frappe_s3_attachment.controller.generate_file"
-			file_url = f"""/api/method/{method}?key={key}&file_name={doc.file_name}"""
+			generate_method = "frappe_s3_attachment.controller.generate_file"
+			file_url = f"""/api/method/{generate_method}?key={key}&file_name={doc.file_name}"""
 		else:
 			file_url = f"{s3_upload.S3_CLIENT.meta.endpoint_url}/{s3_upload.BUCKET}/{key}"
 		os.remove(file_path)
@@ -263,54 +281,11 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 	return
 
 
-def upload_existing_files_s3(name):
-	"""
-	Function to upload all existing files.
-	"""
-	file_doc_name = frappe.db.get_value("File", {"name": name})
-	if file_doc_name:
-		doc = frappe.get_doc("File", name)
-		s3_upload = S3Operations()
-		path = doc.file_url
-		site_path = frappe.utils.get_site_path()
-		parent_doctype = doc.attached_to_doctype
-		parent_name = doc.attached_to_name
-		if not doc.is_private:
-			file_path = site_path + "/public" + path
-		else:
-			file_path = site_path + path
-
-		# File exists?
-		if not os.path.exists(file_path):
-			return
-
-		key = s3_upload.upload_files_to_s3_with_key(
-			file_path, doc.file_name, doc.is_private, parent_doctype, parent_name
-		)
-
-		if doc.is_private:
-			method = "frappe_s3_attachment.controller.generate_file"
-			file_url = f"""/api/method/{method}?key={key}"""
-		else:
-			file_url = f"{s3_upload.S3_CLIENT.meta.endpoint_url}/{s3_upload.BUCKET}/{key}"
-
-		# Remove file from local.
-		os.remove(file_path)
-
-		frappe.db.sql(
-			"""UPDATE `tabFile` SET file_url=%s, folder=%s,
-            old_parent=%s, s3_object_key=%s, content_hash=NULL WHERE name=%s""",
-			(file_url, "Home/Attachments", "Home/Attachments", key, doc.name),
-		)
-		doc.content_hash = None
-		frappe.db.commit()
-
-
-def s3_file_regex_match(file_url):
+def _s3_file_regex_match(file_url):
 	"""
 	Match the public file regex match.
 	"""
-	return re.match(r"^(https:|/api/method/frappe_s3_attachment.controller.generate_file)", file_url)
+	return re.match(r"^(https?:|/api/method/frappe_s3_attachment.controller.generate_file)", file_url)
 
 
 @frappe.whitelist()
@@ -319,11 +294,17 @@ def migrate_existing_files():
 	Function to migrate the existing files to s3.
 	"""
 
-	files_list = frappe.get_all("File", fields=["name", "file_url"])
+	files_list = frappe.get_all(
+		"File",
+		fields=["name", "file_url"],
+		filters=[["file_url", "is", "set"], ["file_url", "!=", ""]],
+	)
 	for file in files_list:
-		if file["file_url"]:
-			if not s3_file_regex_match(file["file_url"]):
-				upload_existing_files_s3(file["name"])
+		if _s3_file_regex_match(file["file_url"]):
+			continue
+		doc = frappe.get_doc("File", file["name"])
+		if doc.exists_on_disk():
+			file_upload_to_s3(doc, "migrate_existing_files")
 	return True
 
 
