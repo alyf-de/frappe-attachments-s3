@@ -229,7 +229,10 @@ class TestControllerCharacterization(FrappeTestCase):
 		get_all_fn.assert_called_once_with(
 			"File",
 			fields=["name", "file_url"],
-			filters=[["file_url", "is", "set"], ["file_url", "!=", ""]],
+			filters=[
+				["file_url", "is", "set"],
+				["s3_object_key", "is", "not set"],
+			],
 		)
 		get_doc_fn.assert_called_once_with("File", "F-LOCAL")
 		upload_fn.assert_called_once_with(local_doc, "migrate_existing_files")
@@ -390,7 +393,7 @@ class TestControllerCharacterization(FrappeTestCase):
 		update_sql, update_params = db_sql.call_args.args
 		self.assertIn("s3_object_key=", update_sql)
 		self.assertIn("content_hash=NULL", "".join(update_sql.split()))
-		self.assertEqual(update_params[3], "shop/path/logo.png")
+		self.assertEqual(update_params[1], "shop/path/logo.png")
 
 	def test_delete_from_cloud_uses_s3_object_key(self):
 		doc = frappe._dict({"s3_object_key": "shop/path/logo.png", "content_hash": "real-sha-256"})

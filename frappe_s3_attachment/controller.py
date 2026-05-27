@@ -296,7 +296,10 @@ def run_migrate_existing_files():
 	files_list = frappe.get_all(
 		"File",
 		fields=["name", "file_url"],
-		filters=[["file_url", "is", "set"], ["file_url", "!=", ""]],
+		filters=[
+			["file_url", "is", "set"],
+			["s3_object_key", "is", "not set"],
+		],
 	)
 	for file in files_list:
 		if _s3_file_regex_match(file["file_url"]):
