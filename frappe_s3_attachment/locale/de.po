@@ -7,8 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version:  frappe_s3_attachment\n"
 "Report-Msgid-Bugs-To: hallo@alyf.de\n"
-"POT-Creation-Date: 2026-05-07 14:59+0053\n"
-"PO-Revision-Date: 2026-05-07 13:05+0200\n"
+"POT-Creation-Date: 2026-05-27 12:32+0053\n"
+"PO-Revision-Date: 2026-05-27 12:35+0200\n"
 "Last-Translator: ALYF GmbH <hallo@alyf.de>\n"
 "Language: de\n"
 "Language-Team: ALYF GmbH <hallo@alyf.de>\n"
@@ -24,7 +24,7 @@ msgstr ""
 msgid "Access Key"
 msgstr "Zugriffsschlüssel (Access Key)"
 
-#: frappe_s3_attachment/controller.py:163
+#: frappe_s3_attachment/controller.py:179
 msgid "Access denied: Could not delete file"
 msgstr "Zugriff verweigert: Datei konnte nicht gelöscht werden"
 
@@ -53,7 +53,7 @@ msgstr "Geben Sie bitte eine gültige HTTPS-URL in {0} ein, zum Beispiel: {1}."
 msgid "Exclude these DocTypes from the automatic S3 attachment upload and store their attachments locally."
 msgstr "Anhänge dieser DocTypes vom automatischen S3-Upload ausschließen und lokal speichern."
 
-#: frappe_s3_attachment/controller.py:154
+#: frappe_s3_attachment/controller.py:170
 msgid "File Upload Failed. Please try again."
 msgstr "Datei-Upload fehlgeschlagen. Bitte versuchen Sie es erneut."
 
@@ -89,6 +89,19 @@ msgstr "Vorhandene Dateien migrieren"
 
 #. Label of a Section Break field in DocType 'S3 File Attachment'
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Migration"
+msgstr "Migration"
+
+#: frappe_s3_attachment/controller.py:331
+msgid "Migration of local files to S3 has been queued. This may take a while for large sites. Track progress in {0}."
+msgstr "Es wurde ein Hintergrundjob für die Migration lokaler Dateien in den S3-Bucket erstellt. Bei großen Datensätzen kann dies mehrere Minuten dauern. Fortschritt kann in {0} verfolgt werden."
+
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.js:12
+msgid "Queuing S3 migration..."
+msgstr "Hintergrundjob für S3-Migration wird erstellt…"
+
+#. Label of a Section Break field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
 msgid "S3 API Credentials"
 msgstr "S3-API-Zugangsdaten"
 
@@ -117,6 +130,15 @@ msgstr "S3-Dateianhang"
 msgid "S3 Ignored DocType Row"
 msgstr "S3 ignorierte DocType-Zeile"
 
+#: frappe_s3_attachment/controller.py:336
+#: frappe_s3_attachment/controller.py:348
+msgid "S3 Migration"
+msgstr "S3-Migration"
+
+#: frappe_s3_attachment/controller.py:344
+msgid "S3 migration is already queued or running. Track progress in {0}."
+msgstr "Die S3-Migration befindet sich bereits in der Warteschlange oder wurde bereits gestartet. Fortschritt kann in {0} verfolgt werden."
+
 #. Label of a Password field in DocType 'S3 File Attachment'
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.py:22
@@ -137,6 +159,11 @@ msgstr "Ablaufzeit der signierten URL"
 msgid "System Manager"
 msgstr "Systemmanager"
 
+#. Label of a Int field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Timeout for Migration Job"
+msgstr "Zeitlimit für Migrations-Job"
+
 #. Description of the 'Delete file from cloud ' (Check) field in DocType 'S3
 #. File Attachment'
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
@@ -148,6 +175,12 @@ msgstr "Legt fest, ob Dateien, die in der App gelöscht werden, auch im S3-Bucke
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
 msgid "in seconds"
 msgstr "in Sekunden"
+
+#. Description of the 'Timeout for Migration Job' (Int) field in DocType 'S3
+#. File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "in seconds. Increase for very large datasets. Defaults to 1500 s if not set. Rerun migration, if not all files were uploaded before timeout."
+msgstr "in Sekunden. Bei sehr großen Datenmengen erhöhen. Standard ist 1500 s, wenn nicht gesetzt. Migration erneut ausführen, wenn nicht alle Dateien vor Ablauf des Zeitlimits hochgeladen wurden."
 
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.py:41
 msgid "{0} must not include query strings or fragments."

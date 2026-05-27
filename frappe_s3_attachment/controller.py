@@ -313,6 +313,7 @@ def run_migrate_existing_files():
 @frappe.whitelist()
 def migrate_existing_files():
 	"""Queue migration of local **File** records to S3 on the long worker queue."""
+	frappe.only_for("System Manager")
 	job_id = MIGRATE_EXISTING_FILES_JOB_ID
 	namespaced_job_id = create_job_id(job_id)
 	timeout = frappe.db.get_single_value("S3 File Attachment", "timeout_for_migration_job")
