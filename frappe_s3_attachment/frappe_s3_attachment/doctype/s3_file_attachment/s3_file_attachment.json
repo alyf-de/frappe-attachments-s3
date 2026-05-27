@@ -20,6 +20,7 @@
   "ignored_doctypes_section",
   "ignored_doctypes",
   "section_break_10",
+  "timeout_for_migration_job",
   "migrate_existing_files"
  ],
  "fields": [
@@ -67,8 +68,10 @@
    "non_negative": 1
   },
   {
+   "bold": 1,
    "fieldname": "section_break_10",
-   "fieldtype": "Section Break"
+   "fieldtype": "Section Break",
+   "label": "Migration"
   },
   {
    "fieldname": "migrate_existing_files",
@@ -112,11 +115,19 @@
    "fieldname": "ignored_doctypes",
    "fieldtype": "Table",
    "options": "S3 Ignored DocType Row"
+  },
+  {
+   "default": "1500",
+   "description": "in seconds. Increase for very large datasets. Defaults to 1500 s if not set. Rerun migration, if not all files were uploaded before timeout.",
+   "fieldname": "timeout_for_migration_job",
+   "fieldtype": "Int",
+   "label": "Timeout for Migration Job",
+   "non_negative": 1
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-05-07 14:54:50.341870",
+ "modified": "2026-05-27 11:09:41.965743",
  "modified_by": "Administrator",
  "module": "Frappe S3 Attachment",
  "name": "S3 File Attachment",

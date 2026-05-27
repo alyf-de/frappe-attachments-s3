@@ -13,7 +13,7 @@ import frappe
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from frappe import _
-from frappe.utils import get_link_to_form
+from frappe.utils import cint, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
 
 MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
@@ -315,11 +315,13 @@ def migrate_existing_files():
 	"""Queue migration of local **File** records to S3 on the long worker queue."""
 	job_id = MIGRATE_EXISTING_FILES_JOB_ID
 	namespaced_job_id = create_job_id(job_id)
+	timeout = frappe.db.get_single_value("S3 File Attachment", "timeout_for_migration_job")
+	timeout = cint(timeout) or 1500
 
 	job = enqueue(
 		"frappe_s3_attachment.controller.run_migrate_existing_files",
 		queue="long",
-		timeout=1500,
+		timeout=timeout,
 		job_id=job_id,
 		deduplicate=True,
 	)

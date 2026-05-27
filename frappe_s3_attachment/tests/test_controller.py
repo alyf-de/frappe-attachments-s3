@@ -4,14 +4,20 @@ from unittest.mock import MagicMock, patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import cint
 
 from frappe_s3_attachment import controller
 
 _REAL_FRAPPE_GET_DOC = frappe.get_doc
+DEFAULT_MIGRATE_JOB_TIMEOUT = 1500
 
 
 def _filetype_kind(mime):
 	return MagicMock(mime=mime)
+
+
+def _migration_job_timeout_from_settings(value):
+	return cint(value) or DEFAULT_MIGRATE_JOB_TIMEOUT
 
 
 def _make_settings(**overrides):
@@ -239,22 +245,35 @@ class TestControllerCharacterization(FrappeTestCase):
 
 	def test_migrate_existing_files_enqueues_long_job(self):
 		job = MagicMock(id="test.localhost::frappe_s3_attachment.migrate_existing_files")
-		with patch("frappe_s3_attachment.controller.enqueue", return_value=job) as enqueue_fn:
-			result = controller.migrate_existing_files()
+		with patch("frappe_s3_attachment.controller.frappe.db.get_single_value", return_value=None):
+			with patch("frappe_s3_attachment.controller.enqueue", return_value=job) as enqueue_fn:
+				result = controller.migrate_existing_files()
 		enqueue_fn.assert_called_once_with(
 			"frappe_s3_attachment.controller.run_migrate_existing_files",
 			queue="long",
-			timeout=1500,
+			timeout=DEFAULT_MIGRATE_JOB_TIMEOUT,
 			job_id=controller.MIGRATE_EXISTING_FILES_JOB_ID,
 			deduplicate=True,
 		)
 		self.assertEqual(result, {"job_id": job.id, "queued": True})
 
+	def test_migrate_existing_files_uses_settings_timeout(self):
+		job = MagicMock(id="test.localhost::frappe_s3_attachment.migrate_existing_files")
+		with patch("frappe_s3_attachment.controller.frappe.db.get_single_value", return_value=3600):
+			with patch("frappe_s3_attachment.controller.enqueue", return_value=job) as enqueue_fn:
+				controller.migrate_existing_files()
+		self.assertEqual(enqueue_fn.call_args.kwargs["timeout"], 3600)
+
+	def test_migration_job_timeout_defaults_when_falsy(self):
+		self.assertEqual(_migration_job_timeout_from_settings(0), DEFAULT_MIGRATE_JOB_TIMEOUT)
+		self.assertEqual(_migration_job_timeout_from_settings(None), DEFAULT_MIGRATE_JOB_TIMEOUT)
+
 	def test_migrate_existing_files_skips_when_job_already_enqueued(self):
 		namespaced_job_id = "test.localhost::frappe_s3_attachment.migrate_existing_files"
-		with patch("frappe_s3_attachment.controller.create_job_id", return_value=namespaced_job_id):
-			with patch("frappe_s3_attachment.controller.enqueue", return_value=None) as enqueue_fn:
-				result = controller.migrate_existing_files()
+		with patch("frappe_s3_attachment.controller.frappe.db.get_single_value", return_value=None):
+			with patch("frappe_s3_attachment.controller.create_job_id", return_value=namespaced_job_id):
+				with patch("frappe_s3_attachment.controller.enqueue", return_value=None) as enqueue_fn:
+					result = controller.migrate_existing_files()
 		enqueue_fn.assert_called_once()
 		self.assertEqual(result, {"job_id": namespaced_job_id, "queued": False})
 
