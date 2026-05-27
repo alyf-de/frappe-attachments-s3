@@ -13,6 +13,10 @@ import frappe
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from frappe import _
+from frappe.utils import get_link_to_form
+from frappe.utils.background_jobs import create_job_id, enqueue
+
+MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
 
 
 class S3Operations:
@@ -288,12 +292,8 @@ def _s3_file_regex_match(file_url):
 	return re.match(r"^(https?:|/api/method/frappe_s3_attachment.controller.generate_file)", file_url)
 
 
-@frappe.whitelist()
-def migrate_existing_files():
-	"""
-	Function to migrate the existing files to s3.
-	"""
-
+def run_migrate_existing_files():
+	"""Upload local **File** rows to S3 (background worker)."""
 	files_list = frappe.get_all(
 		"File",
 		fields=["name", "file_url"],
@@ -305,7 +305,46 @@ def migrate_existing_files():
 		doc = frappe.get_doc("File", file["name"])
 		if doc.exists_on_disk():
 			file_upload_to_s3(doc, "migrate_existing_files")
-	return True
+
+
+@frappe.whitelist()
+def migrate_existing_files():
+	"""Queue migration of local **File** records to S3 on the long worker queue."""
+	job_id = MIGRATE_EXISTING_FILES_JOB_ID
+	namespaced_job_id = create_job_id(job_id)
+
+	job = enqueue(
+		"frappe_s3_attachment.controller.run_migrate_existing_files",
+		queue="long",
+		timeout=1500,
+		job_id=job_id,
+		deduplicate=True,
+	)
+	if job:
+		frappe.msgprint(
+			_(
+				"Migration of local files to S3 has been queued. This may take a while for large sites. "
+				"Track progress in {0}."
+			).format(get_link_to_form("RQ Job", job.id)),
+			indicator="blue",
+			title=_("S3 Migration"),
+		)
+		job_id = job.id
+		queued = True
+
+	else:
+		# enqueue returns None, if job is already queued or running
+		frappe.msgprint(
+			_("S3 migration is already queued or running. Track progress in {0}.").format(
+				get_link_to_form("RQ Job", namespaced_job_id)
+			),
+			indicator="orange",
+			title=_("S3 Migration"),
+		)
+		job_id = namespaced_job_id
+		queued = False
+
+	return {"job_id": job_id, "queued": queued}
 
 
 def delete_from_cloud(doc, method):
