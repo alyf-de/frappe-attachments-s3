@@ -244,12 +244,10 @@ def file_upload_to_s3(doc, _method):
 			file_url = f"""/api/method/{generate_method}?key={key}&file_name={doc.file_name}"""
 		else:
 			file_url = f"{s3_upload.S3_CLIENT.meta.endpoint_url}/{s3_upload.BUCKET}/{key}"
-		os.remove(file_path)
-		frappe.db.sql(
-			"""UPDATE `tabFile` SET file_url=%s, folder=%s,
-            old_parent=%s, s3_object_key=%s, content_hash=NULL WHERE name=%s""",
-			(file_url, "Home/Attachments", "Home/Attachments", key, doc.name),
-		)
+
+		# Change file info without triggering any hooks
+		query = "UPDATE `tabFile` SET file_url=%s, s3_object_key=%s, content_hash=NULL WHERE name=%s"
+		frappe.db.sql(query, (file_url, key, doc.name))
 
 		doc.file_url = file_url
 		doc.s3_object_key = key
@@ -261,6 +259,7 @@ def file_upload_to_s3(doc, _method):
 			)
 
 		frappe.db.commit()
+		os.remove(file_path)
 
 
 @frappe.whitelist()
@@ -301,6 +300,7 @@ def run_migrate_existing_files():
 	)
 	for file in files_list:
 		if _s3_file_regex_match(file["file_url"]):
+			# if file is already a remote file, skip
 			continue
 		doc = frappe.get_doc("File", file["name"])
 		if doc.exists_on_disk():
