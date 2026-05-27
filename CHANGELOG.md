@@ -7,15 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-27
+
 ### Added
 
 - **S3 File Attachment** field _Timeout for Migration Job_ (`timeout_for_migration_job`, default 1500 seconds) for the background migration RQ job.
+- German translations for background-migration Desk strings and the new migration settings fields.
 
 ### Changed
 
 - **`migrate_existing_files`** enqueues **`run_migrate_existing_files`** on the **long** queue with deduplication and Desk messages linking to **RQ Job**; the whitelisted API returns `{"job_id": str, "queued": bool}` instead of `True`.
 - Migration scans **File** rows with `file_url` set and `s3_object_key` not set (skips already-migrated rows earlier on large sites).
 - **`file_upload_to_s3`** updates only `file_url`, `s3_object_key`, and `content_hash` (preserves `folder` / `old_parent`); removes the local file only after a successful DB commit.
+- README _Changes vs upstream_ documents background migration and preserved **File** folder placement.
+
+### Security
+
+- **`migrate_existing_files`** is restricted to **System Manager** via `frappe.only_for`.
 
 ## [0.2.1] - 2026-05-12
 
@@ -102,3 +110,4 @@ Initial ALYF fork release on `version-15` and `develop`, including all changes s
 [0.1.1]: https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.1.1
 [0.2.0]: https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.0
 [0.2.1]: https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.1
+[0.2.2]: https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.2

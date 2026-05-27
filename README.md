@@ -3,7 +3,7 @@
 Frappe app to make file upload automatically upload and read from S3.  
 Maintained as a fork of [zerodha/frappe-attachments-s3](https://github.com/zerodha/frappe-attachments-s3) under [alyf-de/frappe-attachments-s3](https://github.com/alyf-de/frappe-attachments-s3).
 
-The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, a dedicated **File** `s3_object_key` locator field with automatic install/migrate setup, characterization and TDD tests, and tagged releases **v0.2.0** / **v0.2.1**. Optional next steps include a consolidated **v16** forward-compatibility pass and further hardening—not required for normal installs.
+The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, a dedicated **File** `s3_object_key` locator field with automatic install/migrate setup, characterization and TDD tests, and tagged. Optional next steps include a consolidated **v16** forward-compatibility pass and further hardening—not required for normal installs.
 
 #### Features
 
@@ -19,12 +19,12 @@ The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filena
 1. `bench get-app https://github.com/alyf-de/frappe-attachments-s3 --branch version-15`
 2. `bench install-app frappe_s3_attachment`
 
-To pin an exact revision, checkout tag [`v0.2.1`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.1) (or [`v0.2.0`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.0)) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
+To pin an exact revision, checkout tag [`v0.2.2`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.2) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 #### Branches
 
 - `develop`: default branch; upstream rebases and feature work land here first.
-- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.2.1**).
+- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.2.2**).
 - `version-16`: to be created at v16 cutover.
 
 #### Changes vs upstream
@@ -55,7 +55,7 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 git diff b595155..HEAD -- path/to/file.py
 ```
 
-**Current release**: [`v0.2.1`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.1) — see [CHANGELOG.md](CHANGELOG.md).
+**Current release**: [`v0.2.2`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.2) — see [CHANGELOG.md](CHANGELOG.md).
 
 #### Known limitations
 
