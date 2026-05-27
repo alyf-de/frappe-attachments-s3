@@ -8,6 +8,7 @@ from frappe.tests.utils import FrappeTestCase
 from frappe_s3_attachment import controller
 
 _REAL_FRAPPE_GET_DOC = frappe.get_doc
+DEFAULT_MIGRATE_JOB_TIMEOUT = 1500
 
 
 def _filetype_kind(mime):
@@ -191,27 +192,27 @@ class TestControllerCharacterization(FrappeTestCase):
 		s3 = controller.S3Operations()
 		self.assertFalse(s3.is_ignored_doctype("Data Import"))
 
-	def test_migrate_existing_files_no_rows_does_not_call_upload(self):
+	def test_run_migrate_existing_files_no_rows_does_not_call_upload(self):
 		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=[]):
 			with patch("frappe_s3_attachment.controller.frappe.get_doc") as get_doc_fn:
 				with patch("frappe_s3_attachment.controller.file_upload_to_s3") as upload_fn:
-					controller.migrate_existing_files()
+					controller.run_migrate_existing_files()
 		get_doc_fn.assert_not_called()
 		upload_fn.assert_not_called()
 
-	def test_migrate_existing_files_skips_when_not_on_disk(self):
+	def test_run_migrate_existing_files_skips_when_not_on_disk(self):
 		rows = [{"name": "F-1", "file_url": "/files/x.txt"}]
 		doc = MagicMock()
 		doc.exists_on_disk.return_value = False
 		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=rows):
 			with patch("frappe_s3_attachment.controller.frappe.get_doc", return_value=doc) as get_doc_fn:
 				with patch("frappe_s3_attachment.controller.file_upload_to_s3") as upload_fn:
-					controller.migrate_existing_files()
+					controller.run_migrate_existing_files()
 		get_doc_fn.assert_called_once_with("File", "F-1")
 		upload_fn.assert_not_called()
 		doc.exists_on_disk.assert_called_once_with()
 
-	def test_migrate_existing_files_skips_remote_http_urls(self):
+	def test_run_migrate_existing_files_skips_remote_http_urls(self):
 		"""``http:`` / ``https:`` rows are skipped by regex before ``get_doc``; local rows upload when on disk."""
 		rows = [
 			{"name": "F-HTTPS", "file_url": "https://other.example/x.bin"},
@@ -225,14 +226,56 @@ class TestControllerCharacterization(FrappeTestCase):
 				"frappe_s3_attachment.controller.frappe.get_doc", return_value=local_doc
 			) as get_doc_fn:
 				with patch("frappe_s3_attachment.controller.file_upload_to_s3") as upload_fn:
-					controller.migrate_existing_files()
+					controller.run_migrate_existing_files()
 		get_all_fn.assert_called_once_with(
 			"File",
 			fields=["name", "file_url"],
-			filters=[["file_url", "is", "set"], ["file_url", "!=", ""]],
+			filters=[
+				["file_url", "is", "set"],
+				["s3_object_key", "is", "not set"],
+			],
 		)
 		get_doc_fn.assert_called_once_with("File", "F-LOCAL")
 		upload_fn.assert_called_once_with(local_doc, "migrate_existing_files")
+
+	def test_migrate_existing_files_enqueues_long_job(self):
+		job = MagicMock(id="test.localhost::frappe_s3_attachment.migrate_existing_files")
+		with patch("frappe_s3_attachment.controller.frappe.db.get_single_value", return_value=None):
+			with patch("frappe_s3_attachment.controller.enqueue", return_value=job) as enqueue_fn:
+				result = controller.migrate_existing_files()
+		enqueue_fn.assert_called_once_with(
+			"frappe_s3_attachment.controller.run_migrate_existing_files",
+			queue="long",
+			timeout=DEFAULT_MIGRATE_JOB_TIMEOUT,
+			job_id=controller.MIGRATE_EXISTING_FILES_JOB_ID,
+			deduplicate=True,
+		)
+		self.assertEqual(result, {"job_id": job.id, "queued": True})
+
+	def test_migrate_existing_files_uses_settings_timeout(self):
+		job = MagicMock(id="test.localhost::frappe_s3_attachment.migrate_existing_files")
+		with patch("frappe_s3_attachment.controller.frappe.db.get_single_value", return_value=3600):
+			with patch("frappe_s3_attachment.controller.enqueue", return_value=job) as enqueue_fn:
+				controller.migrate_existing_files()
+		self.assertEqual(enqueue_fn.call_args.kwargs["timeout"], 3600)
+
+	def test_migrate_existing_files_timeout_defaults_when_falsy(self):
+		job = MagicMock(id="test.localhost::frappe_s3_attachment.migrate_existing_files")
+		for falsy in (0, None):
+			with self.subTest(falsy=falsy):
+				with patch("frappe_s3_attachment.controller.frappe.db.get_single_value", return_value=falsy):
+					with patch("frappe_s3_attachment.controller.enqueue", return_value=job) as enqueue_fn:
+						controller.migrate_existing_files()
+				self.assertEqual(enqueue_fn.call_args.kwargs["timeout"], DEFAULT_MIGRATE_JOB_TIMEOUT)
+
+	def test_migrate_existing_files_skips_when_job_already_enqueued(self):
+		namespaced_job_id = "test.localhost::frappe_s3_attachment.migrate_existing_files"
+		with patch("frappe_s3_attachment.controller.frappe.db.get_single_value", return_value=None):
+			with patch("frappe_s3_attachment.controller.create_job_id", return_value=namespaced_job_id):
+				with patch("frappe_s3_attachment.controller.enqueue", return_value=None) as enqueue_fn:
+					result = controller.migrate_existing_files()
+		enqueue_fn.assert_called_once()
+		self.assertEqual(result, {"job_id": namespaced_job_id, "queued": False})
 
 	def test_upload_public_sets_acl_public_read(self):
 		with patch(
@@ -369,7 +412,7 @@ class TestControllerCharacterization(FrappeTestCase):
 		update_sql, update_params = db_sql.call_args.args
 		self.assertIn("s3_object_key=", update_sql)
 		self.assertIn("content_hash=NULL", "".join(update_sql.split()))
-		self.assertEqual(update_params[3], "shop/path/logo.png")
+		self.assertEqual(update_params[1], "shop/path/logo.png")
 
 	def test_delete_from_cloud_uses_s3_object_key(self):
 		doc = frappe._dict({"s3_object_key": "shop/path/logo.png", "content_hash": "real-sha-256"})

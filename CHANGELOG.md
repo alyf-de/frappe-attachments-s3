@@ -5,6 +5,18 @@ All notable changes to this fork are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **S3 File Attachment** field _Timeout for Migration Job_ (`timeout_for_migration_job`, default 1500 seconds) for the background migration RQ job.
+
+### Changed
+
+- **`migrate_existing_files`** enqueues **`run_migrate_existing_files`** on the **long** queue with deduplication and Desk messages linking to **RQ Job**; the whitelisted API returns `{"job_id": str, "queued": bool}` instead of `True`.
+- Migration scans **File** rows with `file_url` set and `s3_object_key` not set (skips already-migrated rows earlier on large sites).
+- **`file_upload_to_s3`** updates only `file_url`, `s3_object_key`, and `content_hash` (preserves `folder` / `old_parent`); removes the local file only after a successful DB commit.
+
 ## [0.2.1] - 2026-05-12
 
 ### Added

@@ -13,6 +13,10 @@ import frappe
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from frappe import _
+from frappe.utils import cint, get_link_to_form
+from frappe.utils.background_jobs import create_job_id, enqueue
+
+MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
 
 
 class S3Operations:
@@ -240,12 +244,10 @@ def file_upload_to_s3(doc, _method):
 			file_url = f"""/api/method/{generate_method}?key={key}&file_name={doc.file_name}"""
 		else:
 			file_url = f"{s3_upload.S3_CLIENT.meta.endpoint_url}/{s3_upload.BUCKET}/{key}"
-		os.remove(file_path)
-		frappe.db.sql(
-			"""UPDATE `tabFile` SET file_url=%s, folder=%s,
-            old_parent=%s, s3_object_key=%s, content_hash=NULL WHERE name=%s""",
-			(file_url, "Home/Attachments", "Home/Attachments", key, doc.name),
-		)
+
+		# Change file info without triggering any hooks
+		query = "UPDATE `tabFile` SET file_url=%s, s3_object_key=%s, content_hash=NULL WHERE name=%s"
+		frappe.db.sql(query, (file_url, key, doc.name))
 
 		doc.file_url = file_url
 		doc.s3_object_key = key
@@ -257,6 +259,7 @@ def file_upload_to_s3(doc, _method):
 			)
 
 		frappe.db.commit()
+		os.remove(file_path)
 
 
 @frappe.whitelist()
@@ -288,24 +291,66 @@ def _s3_file_regex_match(file_url):
 	return re.match(r"^(https?:|/api/method/frappe_s3_attachment.controller.generate_file)", file_url)
 
 
-@frappe.whitelist()
-def migrate_existing_files():
-	"""
-	Function to migrate the existing files to s3.
-	"""
-
+def run_migrate_existing_files():
+	"""Upload local **File** rows to S3 (background worker)."""
 	files_list = frappe.get_all(
 		"File",
 		fields=["name", "file_url"],
-		filters=[["file_url", "is", "set"], ["file_url", "!=", ""]],
+		filters=[
+			["file_url", "is", "set"],
+			["s3_object_key", "is", "not set"],
+		],
 	)
 	for file in files_list:
 		if _s3_file_regex_match(file["file_url"]):
+			# if file is already a remote file, skip
 			continue
 		doc = frappe.get_doc("File", file["name"])
 		if doc.exists_on_disk():
 			file_upload_to_s3(doc, "migrate_existing_files")
-	return True
+
+
+@frappe.whitelist()
+def migrate_existing_files():
+	"""Queue migration of local **File** records to S3 on the long worker queue."""
+	frappe.only_for("System Manager")
+	job_id = MIGRATE_EXISTING_FILES_JOB_ID
+	namespaced_job_id = create_job_id(job_id)
+	timeout = frappe.db.get_single_value("S3 File Attachment", "timeout_for_migration_job")
+	timeout = cint(timeout) or 1500
+
+	job = enqueue(
+		"frappe_s3_attachment.controller.run_migrate_existing_files",
+		queue="long",
+		timeout=timeout,
+		job_id=job_id,
+		deduplicate=True,
+	)
+	if job:
+		frappe.msgprint(
+			_(
+				"Migration of local files to S3 has been queued. This may take a while for large sites. "
+				"Track progress in {0}."
+			).format(get_link_to_form("RQ Job", job.id)),
+			indicator="blue",
+			title=_("S3 Migration"),
+		)
+		job_id = job.id
+		queued = True
+
+	else:
+		# enqueue returns None, if job is already queued or running
+		frappe.msgprint(
+			_("S3 migration is already queued or running. Track progress in {0}.").format(
+				get_link_to_form("RQ Job", namespaced_job_id)
+			),
+			indicator="orange",
+			title=_("S3 Migration"),
+		)
+		job_id = namespaced_job_id
+		queued = False
+
+	return {"job_id": job_id, "queued": queued}
 
 
 def delete_from_cloud(doc, method):

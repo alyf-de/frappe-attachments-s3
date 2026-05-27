@@ -40,6 +40,8 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 | **`generate_file` (signed URL)** | Any authenticated caller could request a presigned URL if they knew or guessed the object key (key stored in **File** `content_hash`). | Resolves the **File** row by `s3_object_key`, runs **`check_permission('read')`** on that **File**, then redirects; missing row raises **Does Not Exist** (404). |
 | **Ignored DocTypes** | Effectively a fixed skip list (e.g. **Data Import**). | Child table **S3 Ignored DocType Row** on the singleton; **Data Import** is seeded by default and can be removed if you want those files on S3. |
 | **Upload hook exposure** | `file_upload_to_s3` was whitelisted like other helpers. | Hook is **not** whitelisted; only intentional API entry points (e.g. `generate_file`, `migrate_existing_files`) remain exposed. |
+| **Migrate existing files** | Runs synchronously in the HTTP request when the Desk button is clicked (page reload on success). | Queued on the **long** RQ worker with deduplication and an **RQ Job** link in Desk; configurable _Timeout for Migration Job_; candidate scan skips **File** rows that already have `s3_object_key`. Requires `bench worker --queue long`. Local disk files are removed only after a successful DB commit. |
+| **File folder after S3 upload** | Post-upload SQL sets **File** `folder` and `old_parent` to `"Home/Attachments"`. | Post-upload SQL updates only `file_url`, `s3_object_key`, and clears `content_hash`, preserving the existing **File** folder tree (including migrated files). |
 | **Credentials** | Typical upstream installs used plain **Data** for secrets. | _Secret Key_ uses **Password**; reads use `get_password`. |
 | **Quality / CI** | Minimal upstream tooling. | Ruff, pre-commit, Semgrep (Frappe rules), commitlint, GitHub Actions server tests (`bench run-tests` with MariaDB/Redis), vulnerable-dependency check (`pip-audit`), CodeQL, Dependabot. |
 | **Object key generation (`key_generator`)** | ``s3_key_generator`` hook wrapped in a bare ``except`` (silent failure); dead ``doc_path`` branch; hook return normalized with ``lstrip("/").rstrip("/")`` only. | Hook errors log via ``frappe.logger("frappe_s3_attachment").error(..., exc_info=True)`` then fall back to the default key; dead ``doc_path`` path removed; hook return normalized with ``frappe.cstr`` and ``strip("/")``; falsy or slash-only hook results log a **warning** and fall back; hook keys are **not** passed through ``strip_special_chars`` (the site hook owns key shape). |
@@ -106,7 +108,7 @@ When `RUN_MINIO_INTEGRATION_TESTS` is unset (or not `"1"`), these tests are skip
 
 1. Open the **S3 File Attachment** single.
 2. Enter _Bucket Name_, _Access Key_, _Secret Key_, _S3 Bucket Region Name_, optional _Endpoint URL_ (must be `https://` if set), and _Folder Name_ as needed. _Folder Name_ is the default prefix inside the bucket for generated keys.
-3. Use _Migrate Existing Files_ to upload files that still live under `sites/<site>/public` and `private` folders into the bucket.
+3. Use _Migrate Existing Files_ to queue upload of local files still under `sites/<site>/public` and `private` into the bucket. Migration runs on the **long** RQ worker (`bench worker --queue long`); track progress via the linked **RQ Job**. Set _Timeout for Migration Job_ (seconds) on large sites; re-run if the job times out before all files are uploaded.
 4. Enable _Delete file from cloud_ if removed **File** rows should delete the corresponding S3 object.
 
 #### Custom S3 object keys (`s3_key_generator`)
