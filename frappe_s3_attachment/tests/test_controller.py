@@ -435,7 +435,7 @@ class TestControllerCharacterization(FrappeTestCase):
 		def selective_get_doc(*args, **kwargs):
 			if args and args[0] == "S3 File Attachment":
 				return settings
-			return MagicMock(check_permission=MagicMock())
+			return MagicMock(check_permission=MagicMock(), file_name="x.pdf")
 
 		with patch("frappe_s3_attachment.controller.frappe.db.get_value") as db_get_value:
 			db_get_value.return_value = "FILE-LOOKUP-1"
@@ -636,6 +636,25 @@ class TestGenerateFilePermissions(FrappeTestCase):
 
 		self.assertEqual(frappe.local.response["type"], "redirect")
 		self.assertEqual(frappe.local.response["location"], "https://signed.example/presigned")
+
+	def test_generate_file_disposition_ignores_requested_file_name(self):
+		frappe.set_user("Administrator")
+		f = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": "logo.svg",
+				"content": "<svg/>",
+				"is_private": 1,
+			}
+		).insert()
+		frappe.db.set_value("File", f.name, "s3_object_key", "svg-key-perm-test")
+
+		frappe.local.response = frappe._dict()
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
+			controller.generate_file(key="svg-key-perm-test", file_name="preview.pdf")
+
+		params = self.mock_s3_client.generate_presigned_url.call_args.kwargs["Params"]
+		self.assertEqual(params["ResponseContentDisposition"], "attachment; filename*=UTF-8''logo.svg")
 
 	def test_generate_file_missing_key_raises_does_not_exist(self):
 		frappe.set_user("Administrator")

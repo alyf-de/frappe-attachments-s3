@@ -298,10 +298,12 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 	if not file_name_in_db:
 		raise frappe.DoesNotExistError(doctype="File")
 
-	frappe.get_doc("File", file_name_in_db).check_permission("read")
+	file_doc = frappe.get_doc("File", file_name_in_db)
+	file_doc.check_permission("read")
 
 	s3_upload = S3Operations()
-	signed_url = s3_upload.get_url(key, file_name)
+	# Use the stored name, not the request's, so callers cannot turn an SVG into an inline "PDF".
+	signed_url = s3_upload.get_url(key, file_doc.file_name)
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = signed_url
 	return
