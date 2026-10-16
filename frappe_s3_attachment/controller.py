@@ -270,7 +270,7 @@ def file_upload_to_s3(doc, _method, callback=None):
 	"""Upload a **File** row to S3 after insert.
 
 	``doc_events`` handler: uploads the on-disk file, removes the local copy, updates
-	``file_url`` and ``s3_object_key``, and may update the
+	``file_url`` and ``s3_object_key``, clears ``content_hash``, and may update the
 	parent document's ``image_field`` when the parent **DocType** defines one in Meta.
 	Skips upload when *Attached To DocType* is listed as ignored on **S3 File Attachment**.
 
@@ -304,12 +304,13 @@ def file_upload_to_s3(doc, _method, callback=None):
 		frappe.db.set_value(
 			"File",
 			doc.name,
-			{"file_url": file_url, "s3_object_key": key},
+			{"file_url": file_url, "s3_object_key": key, "content_hash": None},
 			update_modified=False,
 		)
 
 		doc.file_url = file_url
 		doc.s3_object_key = key
+		doc.content_hash = None
 
 		image_field = frappe.get_meta(parent_doctype).get("image_field")
 		# A move must not make this file the parent's image, unless it already was.
