@@ -471,6 +471,27 @@ class TestControllerCharacterization(FrappeTestCase):
 				controller.delete_from_cloud(doc, "on_trash")
 				self.mock_s3_client.delete_object.assert_called_once_with(Bucket=bucket, Key="2026/logo.png")
 
+	def test_delete_from_cloud_keeps_bucket_after_public_bucket_setting_changes(self):
+		self.settings.delete_file_from_cloud = 1
+		file_url = "https://s3.local/old-public-bucket/2026/logo.png"
+		for public_bucket_name in ("", "new-public-bucket"):
+			with self.subTest(public_bucket_name=public_bucket_name):
+				self.settings.public_bucket_name = public_bucket_name
+				self.mock_s3_client.reset_mock()
+				doc = frappe._dict({"s3_object_key": "2026/logo.png", "file_url": file_url})
+				controller.delete_from_cloud(doc, "on_trash")
+				self.mock_s3_client.delete_object.assert_called_once_with(
+					Bucket="old-public-bucket", Key="2026/logo.png"
+				)
+
+	def test_delete_from_cloud_uses_main_bucket_for_foreign_endpoint(self):
+		self.settings.delete_file_from_cloud = 1
+		doc = frappe._dict(
+			{"s3_object_key": "2026/logo.png", "file_url": "https://other.example/other-bucket/2026/logo.png"}
+		)
+		controller.delete_from_cloud(doc, "on_trash")
+		self.mock_s3_client.delete_object.assert_called_once_with(Bucket="test-bucket", Key="2026/logo.png")
+
 	def test_delete_from_cloud_skips_when_no_s3_object_key(self):
 		doc = frappe._dict({"s3_object_key": None, "content_hash": "real-sha-256"})
 		mock_s3_class = MagicMock()

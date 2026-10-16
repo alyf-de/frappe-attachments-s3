@@ -78,9 +78,15 @@ class S3Operations:
 		return self.BUCKET
 
 	def get_bucket_of_file(self, file_url, key):
-		"""Return the bucket of an uploaded file. Public file URLs end with ``/{bucket}/{key}``."""
-		if self.PUBLIC_BUCKET and file_url.endswith(f"/{self.PUBLIC_BUCKET}/{key}"):
-			return self.PUBLIC_BUCKET
+		"""Return the bucket of an uploaded file. Public file URLs are ``{endpoint}/{bucket}/{key}``.
+
+		The bucket comes from the URL, not from the settings, so it stays correct after
+		*Public Bucket Name* changes. Private file URLs always use the main bucket.
+		"""
+		prefix = f"{self.S3_CLIENT.meta.endpoint_url}/"
+		suffix = f"/{key}"
+		if file_url.startswith(prefix) and file_url.endswith(suffix):
+			return file_url.removeprefix(prefix).removesuffix(suffix)
 		return self.BUCKET
 
 	def is_ignored_doctype(self, parent_doctype: str) -> bool:
