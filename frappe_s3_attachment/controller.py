@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 from frappe import _
 from frappe.utils import cint, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
+from rq.timeouts import JobTimeoutException
 
 try:
 	from frappe.utils.response import FORCE_DOWNLOAD_EXTENSIONS
@@ -336,6 +337,9 @@ def run_migrate_existing_files():
 
 		try:
 			file_upload_to_s3(doc, "migrate_existing_files")
+		except JobTimeoutException:
+			# The job's time limit must stop the whole migration, not only this file.
+			raise
 		except Exception:
 			# Skip the file so one rejected upload does not stop the whole migration.
 			# The local file and its File row stay unchanged, so a later run retries it.

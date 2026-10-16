@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from rq.timeouts import JobTimeoutException
 
 from frappe_s3_attachment import controller
 
@@ -241,6 +242,23 @@ class TestControllerCharacterization(FrappeTestCase):
 		rollback.assert_called_once_with()
 		log_error.assert_called_once()
 		self.assertEqual(log_error.call_args.kwargs["reference_name"], "F-FAIL")
+
+	def test_run_migrate_existing_files_stops_on_job_timeout(self):
+		rows = [
+			{"name": "F-SLOW", "file_url": "/files/slow.bin"},
+			{"name": "F-NEXT", "file_url": "/files/next.txt"},
+		]
+		doc = MagicMock()
+		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=rows):
+			with patch("frappe_s3_attachment.controller.frappe.get_doc", return_value=doc):
+				with patch(
+					"frappe_s3_attachment.controller.file_upload_to_s3",
+					side_effect=JobTimeoutException("timed out"),
+				) as upload_fn:
+					with self.assertRaises(JobTimeoutException):
+						controller.run_migrate_existing_files()
+
+		upload_fn.assert_called_once()
 
 	def test_run_migrate_existing_files_skips_remote_http_urls(self):
 		"""``http:`` / ``https:`` rows are skipped by regex before ``get_doc``; local rows upload when on disk."""
