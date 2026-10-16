@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from rq.timeouts import JobTimeoutException
 
 from frappe_s3_attachment import controller
 
@@ -212,6 +213,62 @@ class TestControllerCharacterization(FrappeTestCase):
 		get_doc_fn.assert_called_once_with("File", "F-1")
 		upload_fn.assert_not_called()
 		doc.exists_on_disk.assert_called_once_with()
+
+	def test_run_migrate_existing_files_continues_after_failed_upload(self):
+		rows = [
+			{"name": "F-FAIL", "file_url": "/files/logo.png"},
+			{"name": "F-OK", "file_url": "/files/ok.txt"},
+		]
+		rows.insert(1, {"name": "F-FAIL-2", "file_url": "/files/other.png"})
+		docs = {name: MagicMock(name=name) for name in ("F-FAIL", "F-FAIL-2", "F-OK")}
+		for name, doc in docs.items():
+			doc.name = name
+
+		def upload(doc, _method):
+			if doc.name.startswith("F-FAIL"):
+				raise ConnectionError("upload rejected")
+
+		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=rows):
+			with patch(
+				"frappe_s3_attachment.controller.frappe.get_doc",
+				side_effect=lambda _doctype, name: docs[name],
+			):
+				with patch(
+					"frappe_s3_attachment.controller.file_upload_to_s3", side_effect=upload
+				) as upload_fn:
+					db = MagicMock()
+					with patch("frappe_s3_attachment.controller.frappe.db.rollback", db.rollback):
+						with patch("frappe_s3_attachment.controller.frappe.db.commit", db.commit):
+							with patch("frappe_s3_attachment.controller.frappe.log_error", db.log_error):
+								controller.run_migrate_existing_files()
+
+		self.assertEqual(upload_fn.call_count, 3)
+		# Each log is committed before the next failure rolls back.
+		self.assertEqual(
+			[call[0] for call in db.method_calls],
+			["rollback", "log_error", "commit", "rollback", "log_error", "commit"],
+		)
+		self.assertEqual(
+			[call.kwargs["reference_name"] for call in db.log_error.call_args_list],
+			["F-FAIL", "F-FAIL-2"],
+		)
+
+	def test_run_migrate_existing_files_stops_on_job_timeout(self):
+		rows = [
+			{"name": "F-SLOW", "file_url": "/files/slow.bin"},
+			{"name": "F-NEXT", "file_url": "/files/next.txt"},
+		]
+		doc = MagicMock()
+		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=rows):
+			with patch("frappe_s3_attachment.controller.frappe.get_doc", return_value=doc):
+				with patch(
+					"frappe_s3_attachment.controller.file_upload_to_s3",
+					side_effect=JobTimeoutException("timed out"),
+				) as upload_fn:
+					with self.assertRaises(JobTimeoutException):
+						controller.run_migrate_existing_files()
+
+		upload_fn.assert_called_once()
 
 	def test_run_migrate_existing_files_skips_remote_http_urls(self):
 		"""``http:`` / ``https:`` rows are skipped by regex before ``get_doc``; local rows upload when on disk."""
