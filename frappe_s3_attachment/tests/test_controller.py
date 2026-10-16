@@ -218,12 +218,13 @@ class TestControllerCharacterization(FrappeTestCase):
 			{"name": "F-FAIL", "file_url": "/files/logo.png"},
 			{"name": "F-OK", "file_url": "/files/ok.txt"},
 		]
-		docs = {name: MagicMock(name=name) for name in ("F-FAIL", "F-OK")}
+		rows.insert(1, {"name": "F-FAIL-2", "file_url": "/files/other.png"})
+		docs = {name: MagicMock(name=name) for name in ("F-FAIL", "F-FAIL-2", "F-OK")}
 		for name, doc in docs.items():
 			doc.name = name
 
 		def upload(doc, _method):
-			if doc.name == "F-FAIL":
+			if doc.name.startswith("F-FAIL"):
 				raise ConnectionError("upload rejected")
 
 		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=rows):
@@ -234,14 +235,22 @@ class TestControllerCharacterization(FrappeTestCase):
 				with patch(
 					"frappe_s3_attachment.controller.file_upload_to_s3", side_effect=upload
 				) as upload_fn:
-					with patch("frappe_s3_attachment.controller.frappe.db.rollback") as rollback:
-						with patch("frappe_s3_attachment.controller.frappe.log_error") as log_error:
-							controller.run_migrate_existing_files()
+					db = MagicMock()
+					with patch("frappe_s3_attachment.controller.frappe.db.rollback", db.rollback):
+						with patch("frappe_s3_attachment.controller.frappe.db.commit", db.commit):
+							with patch("frappe_s3_attachment.controller.frappe.log_error", db.log_error):
+								controller.run_migrate_existing_files()
 
-		self.assertEqual(upload_fn.call_count, 2)
-		rollback.assert_called_once_with()
-		log_error.assert_called_once()
-		self.assertEqual(log_error.call_args.kwargs["reference_name"], "F-FAIL")
+		self.assertEqual(upload_fn.call_count, 3)
+		# Each log is committed before the next failure rolls back.
+		self.assertEqual(
+			[call[0] for call in db.method_calls],
+			["rollback", "log_error", "commit", "rollback", "log_error", "commit"],
+		)
+		self.assertEqual(
+			[call.kwargs["reference_name"] for call in db.log_error.call_args_list],
+			["F-FAIL", "F-FAIL-2"],
+		)
 
 	def test_run_migrate_existing_files_stops_on_job_timeout(self):
 		rows = [

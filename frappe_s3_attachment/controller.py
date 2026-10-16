@@ -349,6 +349,8 @@ def run_migrate_existing_files():
 				reference_doctype="File",
 				reference_name=doc.name,
 			)
+			# Keep the log when a later file fails and rolls back.
+			frappe.db.commit()
 
 
 @frappe.whitelist()
