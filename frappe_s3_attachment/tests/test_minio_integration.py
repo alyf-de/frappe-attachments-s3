@@ -184,7 +184,9 @@ class TestMinioIntegration(FrappeTestCase):
 		key = file_doc.s3_object_key
 		self._assert_object_exists(key)
 
-		controller.move_to_local(file_doc.name)
+		with patch("frappe_s3_attachment.controller.frappe.publish_progress") as publish_progress:
+			controller.run_move_file(file_doc.name, to_s3=False)
+		self.assertEqual(publish_progress.call_args.args[0], 100)
 		file_doc.reload()
 		self.assertFalse(file_doc.s3_object_key)
 		self.assertTrue(file_doc.file_url.startswith("/private/files/"))
@@ -193,6 +195,8 @@ class TestMinioIntegration(FrappeTestCase):
 			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
 		self.uploaded_keys.discard(key)
 
-		controller.move_to_s3(file_doc.name)
+		with patch("frappe_s3_attachment.controller.frappe.publish_progress") as publish_progress:
+			controller.run_move_file(file_doc.name, to_s3=True)
+		self.assertEqual(publish_progress.call_args.args[0], 100)
 		file_doc.reload()
 		self._assert_object_exists(file_doc.s3_object_key)

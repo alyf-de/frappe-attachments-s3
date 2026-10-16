@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import mimetypes
 import os
 import random
@@ -10,10 +11,11 @@ import urllib.parse
 import boto3
 import filetype
 import frappe
+from boto3.s3.transfer import TransferConfig
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from frappe import _
-from frappe.core.doctype.file.utils import generate_file_name, get_content_hash
+from frappe.core.doctype.file.utils import generate_file_name
 from frappe.utils import cint, get_files_path, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
 from rq.timeouts import JobTimeoutException
@@ -169,7 +171,9 @@ class S3Operations:
 			key = f"{year}/{month}/{day}/{parent_doctype}/{prefix}_{file_name}"
 		return key
 
-	def upload_files_to_s3_with_key(self, file_path, file_name, is_private, parent_doctype, parent_name):
+	def upload_files_to_s3_with_key(
+		self, file_path, file_name, is_private, parent_doctype, parent_name, callback=None
+	):
 		"""
 		Uploads a new file to S3.
 		Strips the file extension to set the content_type in metadata.
@@ -180,6 +184,10 @@ class S3Operations:
 		content_type = content_type or "application/octet-stream"
 		ascii_file_name = unicodedata.normalize("NFKD", file_name).encode("ascii", "ignore").decode("ascii")
 		bucket = self.get_bucket(is_private)
+		transfer_kwargs = {}
+		if callback:
+			# The callback runs Frappe code, which only works in the job's own thread.
+			transfer_kwargs = {"Callback": callback, "Config": TransferConfig(use_threads=False)}
 		try:
 			if is_private:
 				self.S3_CLIENT.upload_file(
@@ -193,6 +201,7 @@ class S3Operations:
 							"file_name": ascii_file_name,
 						},
 					},
+					**transfer_kwargs,
 				)
 			else:
 				extra_args = {
@@ -206,7 +215,7 @@ class S3Operations:
 				if not self.PUBLIC_BUCKET:
 					extra_args["ACL"] = "public-read"
 
-				self.S3_CLIENT.upload_file(file_path, bucket, key, ExtraArgs=extra_args)
+				self.S3_CLIENT.upload_file(file_path, bucket, key, ExtraArgs=extra_args, **transfer_kwargs)
 
 		except boto3.exceptions.S3UploadFailedError:
 			frappe.throw(_("File Upload Failed. Please try again."))
@@ -257,7 +266,7 @@ class S3Operations:
 		return url
 
 
-def file_upload_to_s3(doc, _method):
+def file_upload_to_s3(doc, _method, callback=None):
 	"""Upload a **File** row to S3 after insert.
 
 	``doc_events`` handler: uploads the on-disk file, removes the local copy, updates
@@ -269,6 +278,7 @@ def file_upload_to_s3(doc, _method):
 		doc: The inserted **File** document.
 		_method (str): Doc event name from Frappe's hook runner (e.g. ``"after_insert"``).
 			Present for the hook calling convention only; unused.
+		callback: Optional boto3 progress callback, called with the bytes sent in each chunk.
 	"""
 	s3_upload = S3Operations()
 	path = doc.file_url
@@ -281,7 +291,7 @@ def file_upload_to_s3(doc, _method):
 		else:
 			file_path = site_path + path
 		key = s3_upload.upload_files_to_s3_with_key(
-			file_path, doc.file_name, doc.is_private, parent_doctype, parent_name
+			file_path, doc.file_name, doc.is_private, parent_doctype, parent_name, callback
 		)
 
 		if doc.is_private:
@@ -433,7 +443,7 @@ def delete_from_cloud(doc, method):
 
 @frappe.whitelist(methods=["POST"])
 def move_to_s3(file_name: str):
-	"""Upload a local **File** to S3 (button on the **File** form)."""
+	"""Queue the upload of a local **File** to S3 (button on the **File** form)."""
 	doc = frappe.get_doc("File", file_name)
 	doc.check_permission("write")
 	if doc.s3_object_key or not doc.exists_on_disk():
@@ -441,27 +451,98 @@ def move_to_s3(file_name: str):
 	if S3Operations().is_ignored_doctype(doc.attached_to_doctype or "File"):
 		frappe.throw(_("Files attached to {0} are kept locally.").format(_(doc.attached_to_doctype)))
 
-	file_upload_to_s3(doc, "move_to_s3")
+	enqueue_move_file(file_name, to_s3=True)
 
 
 @frappe.whitelist(methods=["POST"])
 def move_to_local(file_name: str):
-	"""Download a **File** from S3 to the local file system (button on the **File** form)."""
+	"""Queue the download of a **File** from S3 to local storage (button on the **File** form)."""
 	doc = frappe.get_doc("File", file_name)
 	doc.check_permission("write")
-	key = doc.s3_object_key
-	if not key:
+	if not doc.s3_object_key:
 		frappe.throw(_("This file is not stored in S3."))
 
+	enqueue_move_file(file_name, to_s3=False)
+
+
+def enqueue_move_file(file_name, to_s3):
+	job = enqueue(
+		"frappe_s3_attachment.controller.run_move_file",
+		queue="long",
+		# shortcut: fixed one-hour limit, enough for ~1.5 GB at 0.5 MB/s; make it a setting if that fails
+		timeout=3600,
+		job_id=f"frappe_s3_attachment.move_file::{file_name}",
+		deduplicate=True,
+		file_name=file_name,
+		to_s3=to_s3,
+	)
+	if not job:
+		frappe.throw(_("This file is already being moved."))
+
+
+def run_move_file(file_name, to_s3):
+	"""Move a **File** between S3 and local storage, and tell the user (background job)."""
+	doc = frappe.get_doc("File", file_name)
+	target = _("S3") if to_s3 else _("Local Storage")
+	progress = TransferProgress(doc, _("Moving {0} to {1}").format(doc.file_name, target))
+	try:
+		if to_s3:
+			file_upload_to_s3(doc, "move_to_s3", progress)
+		else:
+			move_file_to_local(doc, progress)
+	except Exception:
+		frappe.msgprint(
+			_("Could not move {0} to {1}. See the Error Log for details.").format(doc.file_name, target),
+			indicator="red",
+			realtime=True,
+		)
+		raise
+
+	# A new modified timestamp makes the open File form reload itself.
+	doc.db_set("modified_by", frappe.session.user, notify=True)
+	frappe.msgprint(
+		_("Moved {0} to {1}.").format(doc.file_name, target), indicator="green", alert=True, realtime=True
+	)
+
+
+class TransferProgress:
+	"""boto3 transfer callback that shows a progress bar on the open **File** form."""
+
+	def __init__(self, doc, title):
+		self.doc = doc
+		self.title = title
+		self.done = 0
+		self.last_percent = 0
+
+	def __call__(self, bytes_amount):
+		if not self.doc.file_size:
+			return
+		self.done += bytes_amount
+		percent = min(100, int(self.done * 100 / self.doc.file_size))
+		# Send at most ~20 updates, not one for every chunk.
+		if percent >= self.last_percent + 5 or percent == 100:
+			self.last_percent = percent
+			frappe.publish_progress(percent, title=self.title, doctype="File", docname=self.doc.name)
+
+
+def move_file_to_local(doc, callback=None):
+	"""Download a **File** from S3 to local storage, then delete the S3 object."""
+	key = doc.s3_object_key
 	s3 = S3Operations()
 	bucket = s3.get_bucket_of_file(doc.file_url, key)
-	content = s3.S3_CLIENT.get_object(Bucket=bucket, Key=key)["Body"].read()
 
 	safe_file_name = re.sub(r"[/\\%?#]", "_", doc.file_name)
 	local_file_name = generate_file_name(safe_file_name, is_private=doc.is_private)
 	file_path = get_files_path(local_file_name, is_private=doc.is_private)
-	with open(file_path, "wb") as f:
-		f.write(content)
+	# Streams to a temporary file and renames it at the end, so memory use stays small.
+	s3.S3_CLIENT.download_file(
+		bucket, key, file_path, Callback=callback, Config=TransferConfig(use_threads=False)
+	)
+
+	md5 = hashlib.md5(usedforsecurity=False)
+	with open(file_path, "rb") as f:
+		for chunk in iter(lambda: f.read(1024 * 1024), b""):
+			md5.update(chunk)
 
 	old_file_url = doc.file_url
 	file_url = f"/private/files/{local_file_name}" if doc.is_private else f"/files/{local_file_name}"
@@ -469,7 +550,7 @@ def move_to_local(file_name: str):
 	frappe.db.set_value(
 		"File",
 		doc.name,
-		{"file_url": file_url, "s3_object_key": None, "content_hash": get_content_hash(content)},
+		{"file_url": file_url, "s3_object_key": None, "content_hash": md5.hexdigest()},
 		update_modified=False,
 	)
 

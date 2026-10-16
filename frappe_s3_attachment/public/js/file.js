@@ -32,7 +32,8 @@ function move_file(frm, method, message) {
 			method: `frappe_s3_attachment.controller.${method}`,
 			args: { file_name: frm.doc.name },
 			freeze: true,
-			callback: () => frm.reload_doc(),
+			// The job shows its progress here and reloads the form when it is done.
+			callback: () => frappe.show_alert(__("Moving the file in the background...")),
 		})
 	);
 }
