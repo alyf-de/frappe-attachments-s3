@@ -342,7 +342,8 @@ def run_migrate_existing_files():
 			raise
 		except Exception:
 			# Skip the file so one rejected upload does not stop the whole migration.
-			# The local file and its File row stay unchanged, so a later run retries it.
+			# A failure before the database commit leaves the local file for a later retry.
+			# A cleanup failure after the commit leaves the row migrated, so it is not retried.
 			frappe.db.rollback()
 			frappe.log_error(
 				title=_("S3 migration failed for file {0}").format(doc.name),
