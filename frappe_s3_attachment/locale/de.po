@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version:  frappe_s3_attachment\n"
 "Report-Msgid-Bugs-To: hallo@alyf.de\n"
-"POT-Creation-Date: 2026-05-27 12:32+0053\n"
+"POT-Creation-Date: 2026-10-16 21:56+0053\n"
 "PO-Revision-Date: 2026-05-27 12:35+0200\n"
 "Last-Translator: ALYF GmbH <hallo@alyf.de>\n"
 "Language: de\n"
@@ -24,7 +24,7 @@ msgstr ""
 msgid "Access Key"
 msgstr "Zugriffsschlüssel (Access Key)"
 
-#: frappe_s3_attachment/controller.py:179
+#: frappe_s3_attachment/controller.py:230
 msgid "Access denied: Could not delete file"
 msgstr "Zugriff verweigert: Datei konnte nicht gelöscht werden"
 
@@ -32,6 +32,14 @@ msgstr "Zugriff verweigert: Datei konnte nicht gelöscht werden"
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
 msgid "Bucket Name"
 msgstr "Bucket-Name"
+
+#: frappe_s3_attachment/controller.py:582
+msgid "Could not delete S3 object after moving file {0}"
+msgstr "S3-Objekt konnte nach dem Verschieben der Datei {0} nicht gelöscht werden"
+
+#: frappe_s3_attachment/controller.py:500
+msgid "Could not move {0} to {1}. See the Error Log for details."
+msgstr "{0} konnte nicht nach {1} verschoben werden. Details finden Sie im Fehlerprotokoll."
 
 #. Label of a Check field in DocType 'S3 File Attachment'
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
@@ -53,9 +61,13 @@ msgstr "Geben Sie bitte eine gültige HTTPS-URL in {0} ein, zum Beispiel: {1}."
 msgid "Exclude these DocTypes from the automatic S3 attachment upload and store their attachments locally."
 msgstr "Anhänge dieser DocTypes vom automatischen S3-Upload ausschließen und lokal speichern."
 
-#: frappe_s3_attachment/controller.py:170
+#: frappe_s3_attachment/controller.py:221
 msgid "File Upload Failed. Please try again."
 msgstr "Datei-Upload fehlgeschlagen. Bitte versuchen Sie es erneut."
+
+#: frappe_s3_attachment/controller.py:457
+msgid "Files attached to {0} are kept locally."
+msgstr "An {0} angehängte Dateien werden lokal gespeichert."
 
 #. Label of a Data field in DocType 'S3 File Attachment'
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
@@ -82,6 +94,10 @@ msgstr "Ignorierte DocTypes"
 msgid "Leave blank for AWS. For Hetzner set for example: <b>https://nbg1.your-objectstorage.com</b>."
 msgstr "Für AWS leer lassen. Für Hetzner zum Beispiel eintragen: <b>https://nbg1.your-objectstorage.com</b>."
 
+#: frappe_s3_attachment/controller.py:491
+msgid "Local Storage"
+msgstr "Lokaler Speicher"
+
 #. Label of a Button field in DocType 'S3 File Attachment'
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
 msgid "Migrate Existing Files"
@@ -92,13 +108,48 @@ msgstr "Vorhandene Dateien migrieren"
 msgid "Migration"
 msgstr "Migration"
 
-#: frappe_s3_attachment/controller.py:331
+#: frappe_s3_attachment/controller.py:415
 msgid "Migration of local files to S3 has been queued. This may take a while for large sites. Track progress in {0}."
 msgstr "Es wurde ein Hintergrundjob für die Migration lokaler Dateien in den S3-Bucket erstellt. Bei großen Datensätzen kann dies mehrere Minuten dauern. Fortschritt kann in {0} verfolgt werden."
 
-#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.js:12
+#: frappe_s3_attachment/public/js/file.js:6
+msgid "Move to Local Storage"
+msgstr "In lokalen Speicher verschieben"
+
+#: frappe_s3_attachment/public/js/file.js:16
+msgid "Move to S3"
+msgstr "Nach S3 verschieben"
+
+#: frappe_s3_attachment/controller.py:509
+msgid "Moved {0} to {1}."
+msgstr "{0} wurde nach {1} verschoben."
+
+#: frappe_s3_attachment/public/js/file.js:36
+msgid "Moving the file in the background..."
+msgstr "Die Datei wird im Hintergrund verschoben..."
+
+#: frappe_s3_attachment/controller.py:492
+msgid "Moving {0} to {1}"
+msgstr "{0} wird nach {1} verschoben"
+
+#. Description of the 'Public Bucket Name' (Data) field in DocType 'S3 File
+#. Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Optional bucket for public files. Must be publicly readable. If empty, public files go to Bucket Name with a public-read ACL."
+msgstr "Optionaler Bucket für öffentliche Dateien. Muss öffentlich lesbar sein. Wenn leer, werden öffentliche Dateien mit einer public-read-ACL im unter Eimername angegebenen Bucket gespeichert."
+
+#. Label of a Data field in DocType 'S3 File Attachment'
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
+msgid "Public Bucket Name"
+msgstr "Öffentlicher Eimername"
+
+#: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.js:10
 msgid "Queuing S3 migration..."
 msgstr "Hintergrundjob für S3-Migration wird erstellt…"
+
+#: frappe_s3_attachment/controller.py:491
+msgid "S3"
+msgstr "S3"
 
 #. Label of a Section Break field in DocType 'S3 File Attachment'
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
@@ -130,12 +181,16 @@ msgstr "S3-Dateianhang"
 msgid "S3 Ignored DocType Row"
 msgstr "S3 ignorierte DocType-Zeile"
 
-#: frappe_s3_attachment/controller.py:336
-#: frappe_s3_attachment/controller.py:348
+#: frappe_s3_attachment/controller.py:420
+#: frappe_s3_attachment/controller.py:432
 msgid "S3 Migration"
 msgstr "S3-Migration"
 
-#: frappe_s3_attachment/controller.py:344
+#: frappe_s3_attachment/controller.py:389
+msgid "S3 migration failed for file {0}"
+msgstr "S3-Migration für Datei {0} fehlgeschlagen"
+
+#: frappe_s3_attachment/controller.py:428
 msgid "S3 migration is already queued or running. Track progress in {0}."
 msgstr "Die S3-Migration befindet sich bereits in der Warteschlange oder wurde bereits gestartet. Fortschritt kann in {0} verfolgt werden."
 
@@ -158,6 +213,26 @@ msgstr "Ablaufzeit der signierten URL"
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
 msgid "System Manager"
 msgstr "Systemmanager"
+
+#: frappe_s3_attachment/public/js/file.js:10
+msgid "This downloads the file from S3 to this server and deletes it from S3. The file URL changes, so links to the old URL stop working."
+msgstr "Dadurch wird die Datei von S3 auf diesen Server heruntergeladen und aus S3 gelöscht. Die Datei-URL ändert sich, sodass Links auf die alte URL nicht mehr funktionieren."
+
+#: frappe_s3_attachment/controller.py:485
+msgid "This file is already being moved."
+msgstr "Diese Datei wird bereits verschoben."
+
+#: frappe_s3_attachment/controller.py:468
+msgid "This file is not stored in S3."
+msgstr "Diese Datei ist nicht in S3 gespeichert."
+
+#: frappe_s3_attachment/controller.py:455
+msgid "This file is not stored locally."
+msgstr "Diese Datei ist nicht lokal gespeichert."
+
+#: frappe_s3_attachment/public/js/file.js:20
+msgid "This uploads the file to S3 and deletes it from this server. The file URL changes, so links to the old URL stop working."
+msgstr "Dadurch wird die Datei nach S3 hochgeladen und von diesem Server gelöscht. Die Datei-URL ändert sich, sodass Links auf die alte URL nicht mehr funktionieren."
 
 #. Label of a Int field in DocType 'S3 File Attachment'
 #: frappe_s3_attachment/frappe_s3_attachment/doctype/s3_file_attachment/s3_file_attachment.json
