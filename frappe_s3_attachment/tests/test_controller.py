@@ -548,10 +548,18 @@ class TestNonAsciiFilenames(FrappeTestCase):
 		disposition = params["ResponseContentDisposition"]
 		self.assertRegex(
 			disposition,
-			r"^attachment; filename\*=UTF-8''.+$",
+			r"^inline; filename\*=UTF-8''.+$",
 		)
 		encoded = disposition.split("''", 1)[1]
 		self.assertEqual(urllib.parse.unquote(encoded), "Pflanzenrückgabe.pdf")
+
+	def test_content_disposition_forces_download_for_unsafe_extensions(self):
+		self.mock_s3_client.generate_presigned_url.return_value = "https://signed.example/presigned"
+		s3 = controller.S3Operations()
+		s3.get_url("2026/05/06/File/AB12CD34_logo.SVG", "logo.SVG")
+
+		params = self.mock_s3_client.generate_presigned_url.call_args.kwargs["Params"]
+		self.assertTrue(params["ResponseContentDisposition"].startswith("attachment; "))
 
 
 _PERM_TEST_USER = "s3_attach_perm_test@test.local"

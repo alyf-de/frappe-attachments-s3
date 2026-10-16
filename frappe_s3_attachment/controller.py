@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 from frappe import _
 from frappe.utils import cint, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
+from frappe.utils.response import FORCE_DOWNLOAD_EXTENSIONS
 
 MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
 
@@ -201,7 +202,10 @@ class S3Operations:
 		}
 		if file_name:
 			quoted = urllib.parse.quote(file_name)
-			params["ResponseContentDisposition"] = f"attachment; filename*=UTF-8''{quoted}"
+			# Same as Frappe's send_private_file: inline so previews work, except for XSS-prone types.
+			extension = os.path.splitext(file_name)[1].lower()
+			disposition = "attachment" if extension in FORCE_DOWNLOAD_EXTENSIONS else "inline"
+			params["ResponseContentDisposition"] = f"{disposition}; filename*=UTF-8''{quoted}"
 
 		url = self.S3_CLIENT.generate_presigned_url(
 			"get_object",
