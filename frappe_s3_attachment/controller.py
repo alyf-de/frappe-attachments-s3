@@ -13,7 +13,8 @@ import frappe
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from frappe import _
-from frappe.utils import cint, get_link_to_form
+from frappe.core.doctype.file.utils import generate_file_name, get_content_hash
+from frappe.utils import cint, get_files_path, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
 from rq.timeouts import JobTimeoutException
 
@@ -290,8 +291,12 @@ def file_upload_to_s3(doc, _method):
 			file_url = f"{s3_upload.S3_CLIENT.meta.endpoint_url}/{s3_upload.get_bucket(doc.is_private)}/{key}"
 
 		# Change file info without triggering any hooks
-		query = "UPDATE `tabFile` SET file_url=%s, s3_object_key=%s, content_hash=NULL WHERE name=%s"
-		frappe.db.sql(query, (file_url, key, doc.name))
+		frappe.db.set_value(
+			"File",
+			doc.name,
+			{"file_url": file_url, "s3_object_key": key, "content_hash": None},
+			update_modified=False,
+		)
 
 		doc.file_url = file_url
 		doc.s3_object_key = key
@@ -424,6 +429,62 @@ def delete_from_cloud(doc, method):
 	s3 = S3Operations()
 	bucket = s3.get_bucket_of_file(doc.file_url, doc.s3_object_key)
 	s3.delete_from_s3(doc.s3_object_key, bucket)
+
+
+@frappe.whitelist(methods=["POST"])
+def move_to_s3(file_name: str):
+	"""Upload a local **File** to S3 (button on the **File** form)."""
+	doc = frappe.get_doc("File", file_name)
+	doc.check_permission("write")
+	if doc.s3_object_key or not doc.exists_on_disk():
+		frappe.throw(_("This file is not stored locally."))
+	if S3Operations().is_ignored_doctype(doc.attached_to_doctype or "File"):
+		frappe.throw(_("Files attached to {0} are kept locally.").format(_(doc.attached_to_doctype)))
+
+	file_upload_to_s3(doc, "move_to_s3")
+
+
+@frappe.whitelist(methods=["POST"])
+def move_to_local(file_name: str):
+	"""Download a **File** from S3 to the local file system (button on the **File** form)."""
+	doc = frappe.get_doc("File", file_name)
+	doc.check_permission("write")
+	key = doc.s3_object_key
+	if not key:
+		frappe.throw(_("This file is not stored in S3."))
+
+	s3 = S3Operations()
+	bucket = s3.get_bucket_of_file(doc.file_url, key)
+	content = s3.S3_CLIENT.get_object(Bucket=bucket, Key=key)["Body"].read()
+
+	safe_file_name = re.sub(r"[/\\%?#]", "_", doc.file_name)
+	local_file_name = generate_file_name(safe_file_name, is_private=doc.is_private)
+	file_path = get_files_path(local_file_name, is_private=doc.is_private)
+	with open(file_path, "wb") as f:
+		f.write(content)
+
+	old_file_url = doc.file_url
+	file_url = f"/private/files/{local_file_name}" if doc.is_private else f"/files/{local_file_name}"
+	# Change file info without triggering any hooks, like file_upload_to_s3
+	frappe.db.set_value(
+		"File",
+		doc.name,
+		{"file_url": file_url, "s3_object_key": None, "content_hash": get_content_hash(content)},
+		update_modified=False,
+	)
+
+	if doc.attached_to_doctype and doc.attached_to_name:
+		image_field = frappe.get_meta(doc.attached_to_doctype).get("image_field")
+		parent_image = image_field and frappe.db.get_value(
+			doc.attached_to_doctype, doc.attached_to_name, image_field
+		)
+		if parent_image == old_file_url:
+			frappe.db.set_value(doc.attached_to_doctype, doc.attached_to_name, image_field, file_url)
+
+	# Commit before deleting the S3 object, so a failed commit cannot lose the file.
+	frappe.db.commit()
+	# Ignore "Delete file from cloud": no File row references the object after the move.
+	s3.S3_CLIENT.delete_object(Bucket=bucket, Key=key)
 
 
 @frappe.whitelist()

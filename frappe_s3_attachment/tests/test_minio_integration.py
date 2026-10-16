@@ -176,3 +176,23 @@ class TestMinioIntegration(FrappeTestCase):
 		with self.assertRaises(ClientError):
 			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
 		self.uploaded_keys.discard(key)
+
+	def test_minio_move_to_local_and_back_to_s3(self):
+		file_doc = self._create_file_doc(file_name="minio-move.txt", content="move", is_private=1)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		key = file_doc.s3_object_key
+		self._assert_object_exists(key)
+
+		controller.move_to_local(file_doc.name)
+		file_doc.reload()
+		self.assertFalse(file_doc.s3_object_key)
+		self.assertTrue(file_doc.file_url.startswith("/private/files/"))
+		self.assertEqual(file_doc.get_content(), "move")
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
+		self.uploaded_keys.discard(key)
+
+		controller.move_to_s3(file_doc.name)
+		file_doc.reload()
+		self._assert_object_exists(file_doc.s3_object_key)

@@ -86,6 +86,8 @@ after_migrate = "frappe_s3_attachment.install.after_migrate"
 # }
 # }
 
+doctype_js = {"File": "public/js/file.js"}
+
 doc_events = {
 	"File": {
 		"after_insert": "frappe_s3_attachment.controller.file_upload_to_s3",

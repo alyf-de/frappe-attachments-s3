@@ -1,6 +1,6 @@
 import re
 import urllib.parse
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
@@ -479,25 +479,32 @@ class TestControllerCharacterization(FrappeTestCase):
 		mock_s3_ops.upload_files_to_s3_with_key.return_value = "shop/path/logo.png"
 		mock_s3_ops.S3_CLIENT.meta.endpoint_url = "https://s3.local"
 		mock_s3_ops.get_bucket.return_value = "test-bucket"
-		with patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops):
-			with patch("frappe_s3_attachment.controller.os.remove"):
-				with patch("frappe_s3_attachment.controller.frappe.db.sql") as db_sql:
-					with patch("frappe_s3_attachment.controller.frappe.db.commit"):
-						with patch("frappe_s3_attachment.controller.frappe.db.set_value") as set_value:
-							with patch(
-								"frappe_s3_attachment.controller.frappe.get_meta",
-								return_value={"image_field": "brand_image"},
-							):
-								controller.file_upload_to_s3(doc, "after_insert")
+		with (
+			patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops),
+			patch("frappe_s3_attachment.controller.os.remove"),
+			patch("frappe_s3_attachment.controller.frappe.db.commit"),
+			patch("frappe_s3_attachment.controller.frappe.db.set_value") as set_value,
+			patch(
+				"frappe_s3_attachment.controller.frappe.get_meta",
+				return_value={"image_field": "brand_image"},
+			),
+		):
+			controller.file_upload_to_s3(doc, "after_insert")
 
-		set_value.assert_called_once_with("Website Settings", "Website Settings", "brand_image", doc.file_url)
 		self.assertEqual(doc.file_url, "https://s3.local/test-bucket/shop/path/logo.png")
 		self.assertEqual(doc.s3_object_key, "shop/path/logo.png")
 		self.assertIsNone(doc.content_hash)
-		update_sql, update_params = db_sql.call_args.args
-		self.assertIn("s3_object_key=", update_sql)
-		self.assertIn("content_hash=NULL", "".join(update_sql.split()))
-		self.assertEqual(update_params[1], "shop/path/logo.png")
+		set_value.assert_has_calls(
+			[
+				call(
+					"File",
+					"FILE-TEST-2",
+					{"file_url": doc.file_url, "s3_object_key": "shop/path/logo.png", "content_hash": None},
+					update_modified=False,
+				),
+				call("Website Settings", "Website Settings", "brand_image", doc.file_url),
+			]
+		)
 
 	def test_delete_from_cloud_uses_s3_object_key(self):
 		self.settings.delete_file_from_cloud = 1
