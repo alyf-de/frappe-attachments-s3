@@ -269,7 +269,7 @@ class S3Operations:
 def file_upload_to_s3(doc, _method, callback=None):
 	"""Upload a **File** row to S3 after insert.
 
-	``doc_events`` handler: uploads the on-disk file, removes the local copy, updates
+	``doc_events`` handler: uploads the on-disk file, removes the local copy unless another **File** uses it, updates
 	``file_url`` and ``s3_object_key``, clears ``content_hash``, and may update the
 	parent document's ``image_field`` when the parent **DocType** defines one in Meta.
 	Skips upload when *Attached To DocType* is listed as ignored on **S3 File Attachment**.
@@ -321,7 +321,9 @@ def file_upload_to_s3(doc, _method, callback=None):
 			frappe.db.set_value(parent_doctype, parent_name, image_field, file_url)
 
 		frappe.db.commit()
-		os.remove(file_path)
+		# Frappe deduplicates uploads by content_hash, so another File can still use this disk file.
+		if not frappe.db.exists("File", {"file_url": path}):
+			os.remove(file_path)
 
 
 @frappe.whitelist()

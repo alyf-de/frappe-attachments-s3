@@ -249,3 +249,16 @@ class TestMinioIntegration(FrappeTestCase):
 		self.assertFalse(file_doc.s3_object_key)
 		self.assertEqual(file_doc.get_content(), "kept")
 		self.assertTrue(frappe.db.exists("Error Log", {"reference_name": file_doc.name}))
+
+	def test_minio_upload_keeps_local_file_used_by_other_file(self):
+		local_doc = self._create_file_doc(file_name="minio-dedup.txt", content="dedup", is_private=1)
+		# Frappe reuses the disk file of a File with the same content_hash.
+		file_doc = self._create_file_doc(file_name="minio-dedup-2.txt", content="dedup", is_private=1)
+		self.assertEqual(file_doc.file_url, local_doc.file_url)
+
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+
+		self._assert_object_exists(file_doc.s3_object_key)
+		self.assertTrue(local_doc.exists_on_disk())
+		self.assertEqual(local_doc.get_content(), "dedup")
