@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import boto3
 import frappe
-from botocore.client import Config
+from botocore.client import BaseClient, Config
 from botocore.exceptions import ClientError
 from frappe.tests.utils import FrappeTestCase
 
@@ -176,3 +176,76 @@ class TestMinioIntegration(FrappeTestCase):
 		with self.assertRaises(ClientError):
 			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
 		self.uploaded_keys.discard(key)
+
+	def test_minio_move_to_local_and_back_to_s3(self):
+		file_doc = self._create_file_doc(file_name="minio-move.txt", content="move", is_private=1)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		key = file_doc.s3_object_key
+		self._assert_object_exists(key)
+
+		with patch("frappe_s3_attachment.controller.frappe.publish_progress") as publish_progress:
+			controller.run_move_file(file_doc.name, to_s3=False)
+		self.assertEqual(publish_progress.call_args.args[0], 100)
+		file_doc.reload()
+		self.assertFalse(file_doc.s3_object_key)
+		self.assertTrue(file_doc.file_url.startswith("/private/files/"))
+		self.assertEqual(file_doc.get_content(), "move")
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
+		self.uploaded_keys.discard(key)
+
+		with patch("frappe_s3_attachment.controller.frappe.publish_progress") as publish_progress:
+			controller.run_move_file(file_doc.name, to_s3=True)
+		self.assertEqual(publish_progress.call_args.args[0], 100)
+		file_doc.reload()
+		self._assert_object_exists(file_doc.s3_object_key)
+
+	def test_minio_move_to_local_keeps_object_used_by_other_file(self):
+		file_doc = self._create_file_doc(file_name="minio-shared.txt", content="shared", is_private=1)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		key = file_doc.s3_object_key
+		self._assert_object_exists(key)
+		other_doc = self._create_file_doc(file_name="minio-shared-2.txt", content="other", is_private=1)
+		other_doc.db_set("s3_object_key", key)
+
+		controller.move_file_to_local(file_doc)
+
+		self._assert_object_exists(key)
+
+	def test_minio_move_to_local_deletes_object_when_same_key_is_in_other_bucket(self):
+		file_doc = self._create_file_doc(file_name="minio-other-bucket.txt", content="mine", is_private=1)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		key = file_doc.s3_object_key
+		self._assert_object_exists(key)
+		other_doc = self._create_file_doc(file_name="minio-other-bucket-2.txt", content="other", is_private=0)
+		other_doc.db_set({"s3_object_key": key, "file_url": f"{self.endpoint_url}/some-public-bucket/{key}"})
+
+		controller.move_file_to_local(file_doc)
+
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
+		self.uploaded_keys.discard(key)
+
+	def test_minio_move_to_local_succeeds_when_s3_delete_fails(self):
+		file_doc = self._create_file_doc(file_name="minio-no-delete.txt", content="kept", is_private=1)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		key = file_doc.s3_object_key
+		self._assert_object_exists(key)
+		make_api_call = BaseClient._make_api_call
+
+		def deny_delete(client, operation_name, api_params):
+			if operation_name == "DeleteObject":
+				raise ClientError({"Error": {"Code": "AccessDenied"}}, operation_name)
+			return make_api_call(client, operation_name, api_params)
+
+		with patch.object(BaseClient, "_make_api_call", deny_delete):
+			controller.move_file_to_local(file_doc)
+
+		file_doc.reload()
+		self.assertFalse(file_doc.s3_object_key)
+		self.assertEqual(file_doc.get_content(), "kept")
+		self.assertTrue(frappe.db.exists("Error Log", {"reference_name": file_doc.name}))
