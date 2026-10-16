@@ -277,7 +277,7 @@ def file_upload_to_s3(doc, _method, callback=None):
 	Args:
 		doc: The inserted **File** document.
 		_method (str): Doc event name from Frappe's hook runner (e.g. ``"after_insert"``).
-			Present for the hook calling convention only; unused.
+			``"move_to_s3"`` updates the parent's image only if it pointed to this file.
 		callback: Optional boto3 progress callback, called with the bytes sent in each chunk.
 	"""
 	s3_upload = S3Operations()
@@ -312,10 +312,13 @@ def file_upload_to_s3(doc, _method, callback=None):
 		doc.s3_object_key = key
 		doc.content_hash = None
 
-		if parent_doctype and frappe.get_meta(parent_doctype).get("image_field"):
-			frappe.db.set_value(
-				parent_doctype, parent_name, frappe.get_meta(parent_doctype).get("image_field"), file_url
-			)
+		image_field = frappe.get_meta(parent_doctype).get("image_field")
+		# A move must not make this file the parent's image, unless it already was.
+		is_parent_image = _method != "move_to_s3" or (
+			image_field and frappe.db.get_value(parent_doctype, parent_name, image_field) == path
+		)
+		if image_field and is_parent_image:
+			frappe.db.set_value(parent_doctype, parent_name, image_field, file_url)
 
 		frappe.db.commit()
 		os.remove(file_path)

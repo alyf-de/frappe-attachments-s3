@@ -506,6 +506,38 @@ class TestControllerCharacterization(FrappeTestCase):
 			]
 		)
 
+	def test_move_to_s3_keeps_other_parent_image(self):
+		doc = frappe._dict(
+			{
+				"name": "FILE-TEST-3",
+				"file_url": "/files/old.png",
+				"attached_to_doctype": "Website Settings",
+				"attached_to_name": "Website Settings",
+				"file_name": "old.png",
+				"is_private": 0,
+			}
+		)
+		mock_s3_ops = MagicMock()
+		mock_s3_ops.is_ignored_doctype.return_value = False
+		mock_s3_ops.upload_files_to_s3_with_key.return_value = "shop/path/old.png"
+		mock_s3_ops.S3_CLIENT.meta.endpoint_url = "https://s3.local"
+		mock_s3_ops.get_bucket.return_value = "test-bucket"
+		with (
+			patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops),
+			patch("frappe_s3_attachment.controller.os.remove"),
+			patch("frappe_s3_attachment.controller.frappe.db.commit"),
+			patch("frappe_s3_attachment.controller.frappe.db.set_value") as set_value,
+			patch("frappe_s3_attachment.controller.frappe.db.get_value", return_value="/files/current.png"),
+			patch(
+				"frappe_s3_attachment.controller.frappe.get_meta",
+				return_value={"image_field": "brand_image"},
+			),
+		):
+			controller.file_upload_to_s3(doc, "move_to_s3")
+
+		parent_calls = [c for c in set_value.call_args_list if c.args[0] == "Website Settings"]
+		self.assertEqual(parent_calls, [])
+
 	def test_delete_from_cloud_uses_s3_object_key(self):
 		self.settings.delete_file_from_cloud = 1
 		doc = frappe._dict(
