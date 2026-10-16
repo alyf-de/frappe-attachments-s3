@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Requires Frappe v15.108.0 or later. Older v15 releases raise _Cannot access file path_ when a new upload has the same content as an S3-backed **File** ([#12](https://github.com/alyf-de/frappe-attachments-s3/issues/12)).
+- **`file_upload_to_s3`** keeps the **File** `content_hash` after upload. Identical uploads still get separate S3 objects.
+
 ## [0.2.2] - 2026-05-27
 
 ### Added

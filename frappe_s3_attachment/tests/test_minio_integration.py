@@ -133,7 +133,7 @@ class TestMinioIntegration(FrappeTestCase):
 
 		controller.file_upload_to_s3(file_doc, "after_insert")
 		file_doc.reload()
-		self.assertFalse(file_doc.content_hash)
+		self.assertTrue(file_doc.content_hash)
 		uploaded_url = file_doc.file_url
 		parsed_url = urllib.parse.urlparse(uploaded_url)
 		bucket_and_key = parsed_url.path.lstrip("/")
@@ -150,7 +150,7 @@ class TestMinioIntegration(FrappeTestCase):
 
 		controller.file_upload_to_s3(file_doc, "after_insert")
 		file_doc.reload()
-		self.assertFalse(file_doc.content_hash)
+		self.assertTrue(file_doc.content_hash)
 		uploaded_url = file_doc.file_url
 		query = urllib.parse.parse_qs(urllib.parse.urlparse(uploaded_url).query)
 		key = query["key"][0]

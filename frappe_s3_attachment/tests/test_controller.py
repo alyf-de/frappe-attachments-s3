@@ -472,6 +472,7 @@ class TestControllerCharacterization(FrappeTestCase):
 				"attached_to_name": "Website Settings",
 				"file_name": "logo.png",
 				"is_private": 0,
+				"content_hash": "real-sha-256",
 			}
 		)
 		mock_s3_ops = MagicMock()
@@ -493,13 +494,13 @@ class TestControllerCharacterization(FrappeTestCase):
 
 		self.assertEqual(doc.file_url, "https://s3.local/test-bucket/shop/path/logo.png")
 		self.assertEqual(doc.s3_object_key, "shop/path/logo.png")
-		self.assertIsNone(doc.content_hash)
+		self.assertEqual(doc.content_hash, "real-sha-256")
 		set_value.assert_has_calls(
 			[
 				call(
 					"File",
 					"FILE-TEST-2",
-					{"file_url": doc.file_url, "s3_object_key": "shop/path/logo.png", "content_hash": None},
+					{"file_url": doc.file_url, "s3_object_key": "shop/path/logo.png"},
 					update_modified=False,
 				),
 				call("Website Settings", "Website Settings", "brand_image", doc.file_url),
@@ -833,12 +834,12 @@ class TestGenerateFilePermissions(FrappeTestCase):
 class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
 	"""Regression for alyf-de/frappe-attachments-s3#12.
 
-	After an S3 private upload, ``content_hash`` is cleared so core
-	``save_file`` duplicate detection does not match a prior S3-backed row and
-	walk ``exists_on_disk`` for a ``/api/method/...`` URL.
+	Core ``save_file`` duplicate detection matches a prior S3-backed row by
+	``content_hash`` and calls ``exists_on_disk`` on its ``/api/method/...`` URL.
+	Frappe v15.108.0+ accepts that URL in ``is_safe_path``, so this must not raise.
 
-	This test simulates that post-upload row state (hook patched) and asserts a
-	second private upload with identical bytes succeeds.
+	This test simulates the post-upload row state (hook patched) and asserts a
+	second private upload with identical bytes succeeds and gets its own file.
 	"""
 
 	_PRIVATE_API_URL = (
@@ -881,14 +882,13 @@ class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
 		).insert()
 		self._created.append(first.name)
 
-		# Simulate post-upload state: S3 hook clears content_hash (see controller).
+		# Simulate post-upload state: S3 hook keeps content_hash (see controller).
 		frappe.db.set_value(
 			"File",
 			first.name,
 			{
 				"file_url": self._PRIVATE_API_URL,
 				"s3_object_key": "fake/2026/05/08/File/AAAAAAAA_seed.txt",
-				"content_hash": None,
 			},
 			update_modified=False,
 		)
@@ -904,8 +904,7 @@ class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
 		).insert()
 		self._created.append(second.name)
 
-		first_hash = frappe.db.get_value("File", first.name, "content_hash")
-		second_hash = frappe.db.get_value("File", second.name, "content_hash")
-		self.assertIsNone(first_hash)
-		self.assertTrue(second_hash)
-		self.assertNotEqual(first_hash, second_hash)
+		self.assertTrue(second.content_hash)
+		self.assertEqual(frappe.db.get_value("File", first.name, "content_hash"), second.content_hash)
+		self.assertTrue(second.file_url.startswith("/private/files/"))
+		self.assertTrue(second.exists_on_disk())
