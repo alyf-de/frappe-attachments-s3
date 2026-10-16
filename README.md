@@ -79,7 +79,7 @@ docker run --rm -d \
   -p 9000:9000 \
   -e MINIO_ROOT_USER=minioadmin \
   -e MINIO_ROOT_PASSWORD=minioadmin \
-  quay.io/minio/minio:latest \
+  chainguard/minio:latest \
   server /data --address ":9000"
 ```
 
