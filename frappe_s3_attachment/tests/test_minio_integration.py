@@ -200,3 +200,16 @@ class TestMinioIntegration(FrappeTestCase):
 		self.assertEqual(publish_progress.call_args.args[0], 100)
 		file_doc.reload()
 		self._assert_object_exists(file_doc.s3_object_key)
+
+	def test_minio_move_to_local_keeps_object_used_by_other_file(self):
+		file_doc = self._create_file_doc(file_name="minio-shared.txt", content="shared", is_private=1)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		key = file_doc.s3_object_key
+		self._assert_object_exists(key)
+		other_doc = self._create_file_doc(file_name="minio-shared-2.txt", content="other", is_private=1)
+		other_doc.db_set("s3_object_key", key)
+
+		controller.move_file_to_local(file_doc)
+
+		self._assert_object_exists(key)
