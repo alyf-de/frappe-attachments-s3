@@ -22,6 +22,7 @@ def _make_settings(**overrides):
 		"endpoint_url": "",
 		"region_name": "fsn1",
 		"bucket_name": "test-bucket",
+		"public_bucket_name": "",
 		"folder_name": "",
 		"ignored_doctypes": [],
 		"signed_url_expiry_time": 300,
@@ -295,6 +296,33 @@ class TestControllerCharacterization(FrappeTestCase):
 		self.assertEqual(call.args[1], "test-bucket")
 		self.assertEqual(call.kwargs["ExtraArgs"]["ACL"], "public-read")
 
+	def test_upload_public_uses_public_bucket_without_acl(self):
+		self.settings.public_bucket_name = "public-bucket"
+		with patch(
+			"frappe_s3_attachment.controller.filetype.guess",
+			return_value=_filetype_kind("image/png"),
+		):
+			s3 = controller.S3Operations()
+			s3.upload_files_to_s3_with_key(
+				"/tmp/logo.png", "logo.png", 0, "Navbar Settings", "Navbar Settings"
+			)
+
+		call = self.mock_s3_client.upload_file.call_args
+		self.assertEqual(call.args[1], "public-bucket")
+		self.assertNotIn("ACL", call.kwargs["ExtraArgs"])
+
+	def test_upload_private_ignores_public_bucket(self):
+		self.settings.public_bucket_name = "public-bucket"
+		with patch(
+			"frappe_s3_attachment.controller.filetype.guess",
+			return_value=_filetype_kind("application/pdf"),
+		):
+			s3 = controller.S3Operations()
+			s3.upload_files_to_s3_with_key("/tmp/private.pdf", "private.pdf", 1, "File", "FILE-0001")
+
+		call = self.mock_s3_client.upload_file.call_args
+		self.assertEqual(call.args[1], "test-bucket")
+
 	def test_upload_private_no_acl_kwarg(self):
 		with patch(
 			"frappe_s3_attachment.controller.filetype.guess",
@@ -347,13 +375,13 @@ class TestControllerCharacterization(FrappeTestCase):
 	def test_delete_from_s3_no_op_when_flag_disabled(self):
 		self.settings.delete_file_from_cloud = 0
 		s3 = controller.S3Operations()
-		s3.delete_from_s3("key-1")
+		s3.delete_from_s3("key-1", "test-bucket")
 		self.mock_s3_client.delete_object.assert_not_called()
 
 	def test_delete_from_s3_calls_delete_object_when_flag_enabled(self):
 		self.settings.delete_file_from_cloud = 1
 		s3 = controller.S3Operations()
-		s3.delete_from_s3("key-1")
+		s3.delete_from_s3("key-1", "test-bucket")
 		self.mock_s3_client.delete_object.assert_called_once_with(Bucket="test-bucket", Key="key-1")
 
 	def test_file_upload_to_s3_skips_upload_when_parent_doctype_is_ignored(self):
@@ -393,7 +421,7 @@ class TestControllerCharacterization(FrappeTestCase):
 		mock_s3_ops.is_ignored_doctype.return_value = False
 		mock_s3_ops.upload_files_to_s3_with_key.return_value = "shop/path/logo.png"
 		mock_s3_ops.S3_CLIENT.meta.endpoint_url = "https://s3.local"
-		mock_s3_ops.BUCKET = "test-bucket"
+		mock_s3_ops.get_bucket.return_value = "test-bucket"
 		with patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops):
 			with patch("frappe_s3_attachment.controller.os.remove"):
 				with patch("frappe_s3_attachment.controller.frappe.db.sql") as db_sql:
@@ -415,11 +443,54 @@ class TestControllerCharacterization(FrappeTestCase):
 		self.assertEqual(update_params[1], "shop/path/logo.png")
 
 	def test_delete_from_cloud_uses_s3_object_key(self):
-		doc = frappe._dict({"s3_object_key": "shop/path/logo.png", "content_hash": "real-sha-256"})
-		mock_s3_ops = MagicMock()
-		with patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops):
-			controller.delete_from_cloud(doc, "on_trash")
-		mock_s3_ops.delete_from_s3.assert_called_once_with("shop/path/logo.png")
+		self.settings.delete_file_from_cloud = 1
+		doc = frappe._dict(
+			{
+				"s3_object_key": "shop/path/logo.png",
+				"file_url": "https://s3.local/test-bucket/shop/path/logo.png",
+				"content_hash": "real-sha-256",
+			}
+		)
+		controller.delete_from_cloud(doc, "on_trash")
+		self.mock_s3_client.delete_object.assert_called_once_with(
+			Bucket="test-bucket", Key="shop/path/logo.png"
+		)
+
+	def test_delete_from_cloud_uses_bucket_from_file_url(self):
+		self.settings.delete_file_from_cloud = 1
+		self.settings.public_bucket_name = "public-bucket"
+		cases = (
+			("https://s3.local/public-bucket/2026/logo.png", "public-bucket"),
+			("https://s3.local/test-bucket/2026/logo.png", "test-bucket"),
+			("/api/method/frappe_s3_attachment.controller.generate_file?key=2026/logo.png", "test-bucket"),
+		)
+		for file_url, bucket in cases:
+			with self.subTest(file_url=file_url):
+				self.mock_s3_client.reset_mock()
+				doc = frappe._dict({"s3_object_key": "2026/logo.png", "file_url": file_url})
+				controller.delete_from_cloud(doc, "on_trash")
+				self.mock_s3_client.delete_object.assert_called_once_with(Bucket=bucket, Key="2026/logo.png")
+
+	def test_delete_from_cloud_keeps_bucket_after_public_bucket_setting_changes(self):
+		self.settings.delete_file_from_cloud = 1
+		file_url = "https://s3.local/old-public-bucket/2026/logo.png"
+		for public_bucket_name in ("", "new-public-bucket"):
+			with self.subTest(public_bucket_name=public_bucket_name):
+				self.settings.public_bucket_name = public_bucket_name
+				self.mock_s3_client.reset_mock()
+				doc = frappe._dict({"s3_object_key": "2026/logo.png", "file_url": file_url})
+				controller.delete_from_cloud(doc, "on_trash")
+				self.mock_s3_client.delete_object.assert_called_once_with(
+					Bucket="old-public-bucket", Key="2026/logo.png"
+				)
+
+	def test_delete_from_cloud_uses_main_bucket_for_foreign_endpoint(self):
+		self.settings.delete_file_from_cloud = 1
+		doc = frappe._dict(
+			{"s3_object_key": "2026/logo.png", "file_url": "https://other.example/other-bucket/2026/logo.png"}
+		)
+		controller.delete_from_cloud(doc, "on_trash")
+		self.mock_s3_client.delete_object.assert_called_once_with(Bucket="test-bucket", Key="2026/logo.png")
 
 	def test_delete_from_cloud_skips_when_no_s3_object_key(self):
 		doc = frappe._dict({"s3_object_key": None, "content_hash": "real-sha-256"})
