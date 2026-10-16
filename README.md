@@ -12,7 +12,8 @@ The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filena
 3. Configure credentials and bucket settings from Desk (**S3 File Attachment** singleton): _Bucket Name_, _Access Key_, _Secret Key_ (stored as **Password**), _S3 Bucket Region Name_, optional _Endpoint URL_ for S3-compatible providers, _Folder Name_, and migration of existing files.
 4. Delete objects in S3 when the **File** document is removed in Desk when _Delete file from cloud_ is enabled.
 5. Files are stored under `{folder}/{year}/{month}/{day}/{doctype}/{random}_{filename}` (see _Folder Name_).
-6. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** is listed there by default (patch **v0.2.1** backfills the row on migrate if missing; you may remove it to allow **Data Import** files on S3).
+6. Optional _Public Bucket Name_: public files go to this separate, publicly readable bucket without an object ACL, while the main bucket stays private. Use it for providers without object ACLs (e.g. Backblaze B2), where a single bucket is either fully public or fully private. If empty, public files go to _Bucket Name_ with a `public-read` ACL.
+7. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** is listed there by default (patch **v0.2.1** backfills the row on migrate if missing; you may remove it to allow **Data Import** files on S3).
 
 #### Installation
 

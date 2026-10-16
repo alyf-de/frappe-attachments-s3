@@ -11,6 +11,7 @@
   "signed_url_expiry_time",
   "credentials_section",
   "bucket_name",
+  "public_bucket_name",
   "access_key",
   "secret_key",
   "section_break_7",
@@ -123,11 +124,17 @@
    "fieldtype": "Int",
    "label": "Timeout for Migration Job",
    "non_negative": 1
+  },
+  {
+   "description": "Optional bucket for public files. Must be publicly readable. If empty, public files go to Bucket Name with a public-read ACL.",
+   "fieldname": "public_bucket_name",
+   "fieldtype": "Data",
+   "label": "Public Bucket Name"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-05-27 11:09:41.965743",
+ "modified": "2026-10-16 13:10:46.828021",
  "modified_by": "Administrator",
  "module": "Frappe S3 Attachment",
  "name": "S3 File Attachment",

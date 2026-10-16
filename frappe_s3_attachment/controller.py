@@ -68,7 +68,20 @@ class S3Operations:
 		client_kwargs["config"] = Config(**config_kwargs)
 		self.S3_CLIENT = boto3.client("s3", **client_kwargs)
 		self.BUCKET = self.s3_settings_doc.bucket_name
+		self.PUBLIC_BUCKET = self.s3_settings_doc.public_bucket_name
 		self.folder_name = self.s3_settings_doc.folder_name
+
+	def get_bucket(self, is_private):
+		"""Return the bucket for new uploads: *Public Bucket Name* for public files, if set."""
+		if not is_private and self.PUBLIC_BUCKET:
+			return self.PUBLIC_BUCKET
+		return self.BUCKET
+
+	def get_bucket_of_file(self, file_url, key):
+		"""Return the bucket of an uploaded file. Public file URLs end with ``/{bucket}/{key}``."""
+		if self.PUBLIC_BUCKET and file_url.endswith(f"/{self.PUBLIC_BUCKET}/{key}"):
+			return self.PUBLIC_BUCKET
+		return self.BUCKET
 
 	def is_ignored_doctype(self, parent_doctype: str) -> bool:
 		"""Return whether *Attached To DocType* ``parent_doctype`` is listed on **S3 File Attachment**."""
@@ -158,11 +171,12 @@ class S3Operations:
 		content_type = (kind.mime if kind else None) or mimetypes.guess_type(file_name)[0]
 		content_type = content_type or "application/octet-stream"
 		ascii_file_name = unicodedata.normalize("NFKD", file_name).encode("ascii", "ignore").decode("ascii")
+		bucket = self.get_bucket(is_private)
 		try:
 			if is_private:
 				self.S3_CLIENT.upload_file(
 					file_path,
-					self.BUCKET,
+					bucket,
 					key,
 					ExtraArgs={
 						"ContentType": content_type,
@@ -173,28 +187,28 @@ class S3Operations:
 					},
 				)
 			else:
-				self.S3_CLIENT.upload_file(
-					file_path,
-					self.BUCKET,
-					key,
-					ExtraArgs={
+				extra_args = {
+					"ContentType": content_type,
+					"Metadata": {
 						"ContentType": content_type,
-						"ACL": "public-read",
-						"Metadata": {
-							"ContentType": content_type,
-						},
 					},
-				)
+				}
+				# A public bucket is readable by its own policy. Some providers (e.g. Backblaze B2)
+				# reject object ACLs, so the ACL is only set when public files share the main bucket.
+				if not self.PUBLIC_BUCKET:
+					extra_args["ACL"] = "public-read"
+
+				self.S3_CLIENT.upload_file(file_path, bucket, key, ExtraArgs=extra_args)
 
 		except boto3.exceptions.S3UploadFailedError:
 			frappe.throw(_("File Upload Failed. Please try again."))
 		return key
 
-	def delete_from_s3(self, key):
+	def delete_from_s3(self, key, bucket):
 		"""Delete file from s3"""
 		if self.s3_settings_doc.delete_file_from_cloud:
 			try:
-				self.S3_CLIENT.delete_object(Bucket=self.s3_settings_doc.bucket_name, Key=key)
+				self.S3_CLIENT.delete_object(Bucket=bucket, Key=key)
 			except ClientError:
 				frappe.throw(_("Access denied: Could not delete file"))
 
@@ -266,7 +280,7 @@ def file_upload_to_s3(doc, _method):
 			generate_method = "frappe_s3_attachment.controller.generate_file"
 			file_url = f"""/api/method/{generate_method}?key={key}&file_name={doc.file_name}"""
 		else:
-			file_url = f"{s3_upload.S3_CLIENT.meta.endpoint_url}/{s3_upload.BUCKET}/{key}"
+			file_url = f"{s3_upload.S3_CLIENT.meta.endpoint_url}/{s3_upload.get_bucket(doc.is_private)}/{key}"
 
 		# Change file info without triggering any hooks
 		query = "UPDATE `tabFile` SET file_url=%s, s3_object_key=%s, content_hash=NULL WHERE name=%s"
@@ -383,7 +397,8 @@ def delete_from_cloud(doc, method):
 	if not doc.get("s3_object_key"):
 		return
 	s3 = S3Operations()
-	s3.delete_from_s3(doc.s3_object_key)
+	bucket = s3.get_bucket_of_file(doc.file_url, doc.s3_object_key)
+	s3.delete_from_s3(doc.s3_object_key, bucket)
 
 
 @frappe.whitelist()
