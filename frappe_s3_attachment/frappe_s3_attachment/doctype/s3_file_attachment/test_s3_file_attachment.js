@@ -10,14 +10,14 @@ QUnit.test("test: S3 File Attachment", function (assert) {
 
 	frappe.run_serially([
 		// insert a new S3 File Attachment
-		() => frappe.tests.make('S3 File Attachment', [
-			// values to be set
-			{key: 'value'}
-		]),
+		() =>
+			frappe.tests.make("S3 File Attachment", [
+				// values to be set
+				{ key: "value" },
+			]),
 		() => {
-			assert.equal(cur_frm.doc.key, 'value');
+			assert.equal(cur_frm.doc.key, "value");
 		},
-		() => done()
+		() => done(),
 	]);
-
 });
