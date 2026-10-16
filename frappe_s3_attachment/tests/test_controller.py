@@ -212,6 +212,36 @@ class TestControllerCharacterization(FrappeTestCase):
 		upload_fn.assert_not_called()
 		doc.exists_on_disk.assert_called_once_with()
 
+	def test_run_migrate_existing_files_continues_after_failed_upload(self):
+		rows = [
+			{"name": "F-FAIL", "file_url": "/files/logo.png"},
+			{"name": "F-OK", "file_url": "/files/ok.txt"},
+		]
+		docs = {name: MagicMock(name=name) for name in ("F-FAIL", "F-OK")}
+		for name, doc in docs.items():
+			doc.name = name
+
+		def upload(doc, _method):
+			if doc.name == "F-FAIL":
+				raise ConnectionError("upload rejected")
+
+		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=rows):
+			with patch(
+				"frappe_s3_attachment.controller.frappe.get_doc",
+				side_effect=lambda _doctype, name: docs[name],
+			):
+				with patch(
+					"frappe_s3_attachment.controller.file_upload_to_s3", side_effect=upload
+				) as upload_fn:
+					with patch("frappe_s3_attachment.controller.frappe.db.rollback") as rollback:
+						with patch("frappe_s3_attachment.controller.frappe.log_error") as log_error:
+							controller.run_migrate_existing_files()
+
+		self.assertEqual(upload_fn.call_count, 2)
+		rollback.assert_called_once_with()
+		log_error.assert_called_once()
+		self.assertEqual(log_error.call_args.kwargs["reference_name"], "F-FAIL")
+
 	def test_run_migrate_existing_files_skips_remote_http_urls(self):
 		"""``http:`` / ``https:`` rows are skipped by regex before ``get_doc``; local rows upload when on disk."""
 		rows = [

@@ -331,8 +331,20 @@ def run_migrate_existing_files():
 			# if file is already a remote file, skip
 			continue
 		doc = frappe.get_doc("File", file["name"])
-		if doc.exists_on_disk():
+		if not doc.exists_on_disk():
+			continue
+
+		try:
 			file_upload_to_s3(doc, "migrate_existing_files")
+		except Exception:
+			# Skip the file so one rejected upload does not stop the whole migration.
+			# The local file and its File row stay unchanged, so a later run retries it.
+			frappe.db.rollback()
+			frappe.log_error(
+				title=_("S3 migration failed for file {0}").format(doc.name),
+				reference_doctype="File",
+				reference_name=doc.name,
+			)
 
 
 @frappe.whitelist()
