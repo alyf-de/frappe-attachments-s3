@@ -15,7 +15,26 @@ from botocore.exceptions import ClientError
 from frappe import _
 from frappe.utils import cint, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
-from frappe.utils.response import FORCE_DOWNLOAD_EXTENSIONS
+
+try:
+	from frappe.utils.response import FORCE_DOWNLOAD_EXTENSIONS
+except ImportError:  # older Frappe v15 releases define this list inside send_private_file
+	FORCE_DOWNLOAD_EXTENSIONS = (
+		".svg",
+		".svgz",
+		".html",
+		".htm",
+		".xhtml",
+		".xht",
+		".shtml",
+		".shtm",
+		".mhtml",
+		".mht",
+		".xml",
+		".xsl",
+		".xslt",
+		".swf",
+	)
 
 MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
 
