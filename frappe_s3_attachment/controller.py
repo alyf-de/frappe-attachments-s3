@@ -16,6 +16,26 @@ from frappe import _
 from frappe.utils import cint, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
 
+try:
+	from frappe.utils.response import FORCE_DOWNLOAD_EXTENSIONS
+except ImportError:  # older Frappe v15 releases define this list inside send_private_file
+	FORCE_DOWNLOAD_EXTENSIONS = (
+		".svg",
+		".svgz",
+		".html",
+		".htm",
+		".xhtml",
+		".xht",
+		".shtml",
+		".shtm",
+		".mhtml",
+		".mht",
+		".xml",
+		".xsl",
+		".xslt",
+		".swf",
+	)
+
 MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
 
 
@@ -201,7 +221,10 @@ class S3Operations:
 		}
 		if file_name:
 			quoted = urllib.parse.quote(file_name)
-			params["ResponseContentDisposition"] = f"attachment; filename*=UTF-8''{quoted}"
+			# Same as Frappe's send_private_file: inline so previews work, except for XSS-prone types.
+			extension = os.path.splitext(file_name)[1].lower()
+			disposition = "attachment" if extension in FORCE_DOWNLOAD_EXTENSIONS else "inline"
+			params["ResponseContentDisposition"] = f"{disposition}; filename*=UTF-8''{quoted}"
 
 		url = self.S3_CLIENT.generate_presigned_url(
 			"get_object",
@@ -275,10 +298,12 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 	if not file_name_in_db:
 		raise frappe.DoesNotExistError(doctype="File")
 
-	frappe.get_doc("File", file_name_in_db).check_permission("read")
+	file_doc = frappe.get_doc("File", file_name_in_db)
+	file_doc.check_permission("read")
 
 	s3_upload = S3Operations()
-	signed_url = s3_upload.get_url(key, file_name)
+	# Use the stored name, not the request's, so callers cannot turn an SVG into an inline "PDF".
+	signed_url = s3_upload.get_url(key, file_doc.file_name)
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = signed_url
 	return
