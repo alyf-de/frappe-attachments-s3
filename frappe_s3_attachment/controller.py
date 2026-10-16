@@ -568,8 +568,10 @@ def move_file_to_local(doc, callback=None):
 	# Commit before deleting the S3 object, so a failed commit cannot lose the file.
 	frappe.db.commit()
 	# Ignore "Delete file from cloud", but keep an object that another File still uses:
-	# a custom s3_key_generator can give several files the same key.
-	if not frappe.db.exists("File", {"s3_object_key": key}):
+	# a custom s3_key_generator can give several files the same key, in one or both buckets.
+	other_file_urls = frappe.get_all("File", filters={"s3_object_key": key}, pluck="file_url")
+	other_buckets = {s3.get_bucket_of_file(url, key) for url in other_file_urls}
+	if bucket not in other_buckets:
 		try:
 			s3.S3_CLIENT.delete_object(Bucket=bucket, Key=key)
 		except ClientError:
