@@ -570,7 +570,15 @@ def move_file_to_local(doc, callback=None):
 	# Ignore "Delete file from cloud", but keep an object that another File still uses:
 	# a custom s3_key_generator can give several files the same key.
 	if not frappe.db.exists("File", {"s3_object_key": key}):
-		s3.S3_CLIENT.delete_object(Bucket=bucket, Key=key)
+		try:
+			s3.S3_CLIENT.delete_object(Bucket=bucket, Key=key)
+		except ClientError:
+			# The move is complete. The object left behind only uses storage, so log it and go on.
+			frappe.log_error(
+				title=_("Could not delete S3 object after moving file {0}").format(doc.name),
+				reference_doctype="File",
+				reference_name=doc.name,
+			)
 
 
 @frappe.whitelist()

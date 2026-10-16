@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import boto3
 import frappe
-from botocore.client import Config
+from botocore.client import BaseClient, Config
 from botocore.exceptions import ClientError
 from frappe.tests.utils import FrappeTestCase
 
@@ -213,3 +213,24 @@ class TestMinioIntegration(FrappeTestCase):
 		controller.move_file_to_local(file_doc)
 
 		self._assert_object_exists(key)
+
+	def test_minio_move_to_local_succeeds_when_s3_delete_fails(self):
+		file_doc = self._create_file_doc(file_name="minio-no-delete.txt", content="kept", is_private=1)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		key = file_doc.s3_object_key
+		self._assert_object_exists(key)
+		make_api_call = BaseClient._make_api_call
+
+		def deny_delete(client, operation_name, api_params):
+			if operation_name == "DeleteObject":
+				raise ClientError({"Error": {"Code": "AccessDenied"}}, operation_name)
+			return make_api_call(client, operation_name, api_params)
+
+		with patch.object(BaseClient, "_make_api_call", deny_delete):
+			controller.move_file_to_local(file_doc)
+
+		file_doc.reload()
+		self.assertFalse(file_doc.s3_object_key)
+		self.assertEqual(file_doc.get_content(), "kept")
+		self.assertTrue(frappe.db.exists("Error Log", {"reference_name": file_doc.name}))
