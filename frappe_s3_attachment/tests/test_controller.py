@@ -1079,7 +1079,7 @@ class TestProtectS3Fields(FrappeTestCase):
 
 	def test_get_content_of_copy_reads_key_of_original(self):
 		# Core copies attachments with only file_url, e.g. for Communication emails, and unquotes it on insert.
-		file_url = self._insert_private_s3_original("copy/2026/b.txt", "my b & c.txt")
+		file_url = self._insert_private_s3_original("R&D/2026/b+c.txt", "my b & c.txt")
 		copy = frappe.get_doc(
 			{"doctype": "File", "file_name": "my b & c.txt", "file_url": file_url, "is_private": 1}
 		).insert()
@@ -1095,7 +1095,7 @@ class TestProtectS3Fields(FrappeTestCase):
 			s3.S3_CLIENT.get_object.return_value = {"Body": MagicMock(read=MagicMock(return_value=b"hello"))}
 			self.assertEqual(copy.get_content(), "hello")
 
-		s3.S3_CLIENT.get_object.assert_called_once_with(Bucket="test-bucket", Key="copy/2026/b.txt")
+		s3.S3_CLIENT.get_object.assert_called_once_with(Bucket="test-bucket", Key="R&D/2026/b+c.txt")
 
 	def test_insert_copy_of_private_s3_file_checks_access_to_original(self):
 		file_url = self._insert_private_s3_original("copy/2026/secret.txt", "secret.txt")

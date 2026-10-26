@@ -291,6 +291,23 @@ class S3Operations:
 
 
 class S3File(File):
+	def before_insert(self):
+		"""Give a new copy of a private S3 file the encoded URL of its original, if the user can read the original.
+
+		Core unquotes ``file_url`` here, so the copy no longer matches the original: core's access check
+		finds no private file to check, and ``get_content`` finds no key. Core also makes the copy public,
+		because its URL does not start with ``/private``.
+		"""
+		encoded_file_url = self.file_url
+		super().before_insert()
+
+		if encoded_file_url and frappe.db.exists(
+			"File", {"file_url": encoded_file_url, "s3_object_key": ("is", "set"), "is_private": 1}
+		):
+			self.file_url = encoded_file_url
+			self.is_private = 1
+			self.validate_private_file_access()
+
 	def get_content(self) -> bytes | str:
 		"""Read the content of S3 files from S3. Core opens ``file_url`` as a local path, which fails for S3 URLs."""
 		key = self.s3_object_key
@@ -502,7 +519,6 @@ def protect_s3_fields(doc, method):
 	if doc.is_new():
 		# The upload in after_insert sets the key. A copy of an S3 file keeps only its file_url.
 		doc.s3_object_key = None
-		_restore_url_of_private_s3_copy(doc)
 		return
 
 	previous = doc.get_doc_before_save()
@@ -510,28 +526,6 @@ def protect_s3_fields(doc, method):
 	url_changed = previous.s3_object_key and doc.file_url != previous.file_url
 	if key_changed or url_changed:
 		frappe.throw(_("You cannot change the S3 object of a file."), frappe.PermissionError)
-
-
-def _restore_url_of_private_s3_copy(doc):
-	"""Give a new copy of a private S3 file the encoded URL of its original, if the user can read the original.
-
-	Core unquotes ``file_url`` on insert, so the copy no longer matches the original: core's access check
-	finds no private file to check, and ``S3File.get_content`` finds no key. Core also makes the copy public,
-	because its URL does not start with ``/private``.
-	"""
-	if not (doc.file_url or "").startswith("/api/method/frappe_s3_attachment.controller.generate_file?"):
-		return
-
-	keys = urllib.parse.parse_qs(urllib.parse.urlsplit(doc.file_url).query).get("key")
-	if not keys:
-		return
-
-	original_urls = frappe.get_all("File", filters={"s3_object_key": keys[0]}, pluck="file_url")
-	original_url = next((url for url in original_urls if urllib.parse.unquote(url) == doc.file_url), None)
-	if original_url:
-		doc.file_url = original_url
-		doc.is_private = 1
-		doc.validate_private_file_access()
 
 
 def delete_from_cloud(doc, method):
