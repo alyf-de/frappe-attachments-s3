@@ -13,7 +13,7 @@ The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filena
 4. Delete objects in S3 when the **File** document is removed in Desk when _Delete file from cloud_ is enabled.
 5. Files are stored under `{folder}/{year}/{month}/{day}/{doctype}/{random}_{filename}` (see _Folder Name_).
 6. Optional _Public Bucket Name_: public files go to this separate, publicly readable bucket without an object ACL, while the main bucket stays private. Use it for providers without object ACLs (e.g. Backblaze B2), where a single bucket is either fully public or fully private. If empty, public files go to _Bucket Name_ with a `public-read` ACL.
-7. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** is listed there by default (patch **v0.2.1** backfills the row on migrate if missing; you may remove it to allow **Data Import** files on S3).
+7. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** is listed there by default (patch **v0.2.1** backfills the row on migrate if missing; you may remove it to allow **Data Import** files on S3). **Bank Statement Import** is also listed by default if it exists, because it writes back to the file on disk (patch **v0.2.2** adds it on migrate; install ERPNext before this app, or add the row manually).
 8. When _Is Private_ changes on a **File** in S3, the object follows: with a _Public Bucket Name_, it moves to the other bucket; without one, its ACL changes between `private` and `public-read`. The _File URL_ changes accordingly.
 
 #### Installation
@@ -64,6 +64,7 @@ git diff b595155..HEAD -- path/to/file.py
 These match upstream unless noted; further hardening is tracked as follow-up work, not regressions introduced only in this fork:
 
 - **Duplicate uploads**: S3-managed **File** rows intentionally keep `content_hash` empty after upload so Frappe does not deduplicate against them (aligned with remote-file behaviour and [issue #12](https://github.com/alyf-de/frappe-attachments-s3/issues/12)). Handling duplication for remote resources would require adaptions to the core File DocType and is currently considered out of scope for this app. 
+- **File class override** (this fork): the app replaces the **File** class with `override_doctype_class`, so that `get_content()` reads S3 files from S3. In v15, only one app can override **File** this way; another app that also overrides it disables this fix, or loses its own override. In v16, use `extend_doctype_class` instead.
 - **Privacy of shared objects** (this fork): if several **File** rows use the same S3 object (only possible with a custom `s3_key_generator`), changing _Is Private_ on one of them is rejected.
 - **Privacy change is not atomic** (this fork): S3 is changed during the save; a rollback reverts the S3 change. If removing the old public copy fails after the commit, the old public URL stays readable and an error is shown; make the file public and private again to retry. A rollback after a change to public can expose the contents briefly, to readers who already know the object key.
 

@@ -17,6 +17,7 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 from frappe import _
 from frappe.core.doctype.access_log.access_log import make_access_log
+from frappe.core.doctype.file.file import File
 from frappe.core.doctype.file.utils import generate_file_name
 from frappe.utils import cint, get_files_path, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
@@ -287,6 +288,47 @@ class S3Operations:
 		)
 
 		return url
+
+
+class S3File(File):
+	def before_insert(self):
+		"""Give a new copy of a private S3 file the encoded URL of its original, if the user can read the original.
+
+		Core unquotes ``file_url`` here, so the copy no longer matches the original: core's access check
+		finds no private file to check, and ``get_content`` finds no key. Core also makes the copy public,
+		because its URL does not start with ``/private``.
+		"""
+		encoded_file_url = self.file_url
+		super().before_insert()
+
+		if encoded_file_url and frappe.db.exists(
+			"File", {"file_url": encoded_file_url, "s3_object_key": ("is", "set"), "is_private": 1}
+		):
+			self.file_url = encoded_file_url
+			self.is_private = 1
+			self.validate_private_file_access()
+
+	def get_content(self) -> bytes | str:
+		"""Read the content of S3 files from S3. Core opens ``file_url`` as a local path, which fails for S3 URLs."""
+		key = self.s3_object_key
+		if not key and self.is_remote_file:
+			# A copy (e.g. a Communication attachment) has no key. Take it from the row this app uploaded,
+			# never from file_url, which users can set.
+			key = frappe.db.get_value(
+				"File", {"file_url": self.file_url, "s3_object_key": ("is", "set")}, "s3_object_key"
+			)
+		if not key:
+			return super().get_content()
+
+		s3 = S3Operations()
+		bucket = s3.get_bucket_of_file(self.file_url, key)
+		self._content = s3.S3_CLIENT.get_object(Bucket=bucket, Key=key)["Body"].read()
+		try:
+			# Like core: str for text files, bytes for binary files
+			self._content = self._content.decode()
+		except UnicodeDecodeError:
+			pass
+		return self._content
 
 
 def file_upload_to_s3(doc, _method, callback=None):

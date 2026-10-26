@@ -671,6 +671,46 @@ class TestControllerCharacterization(FrappeTestCase):
 		)
 		self.assertIsNone(controller._s3_file_regex_match("/files/plain-local-file.pdf"))
 
+	def _s3_file(self, file_url):
+		return controller.S3File(
+			{"doctype": "File", "file_name": "a.txt", "file_url": file_url, "s3_object_key": "2026/a.txt"}
+		)
+
+	def test_get_content_of_private_file_reads_main_bucket(self):
+		self.mock_s3_client.get_object.return_value = {
+			"Body": MagicMock(read=MagicMock(return_value=b"hello"))
+		}
+		file_doc = self._s3_file(
+			"/api/method/frappe_s3_attachment.controller.generate_file?key=2026%2Fa.txt&file_name=a.txt"
+		)
+
+		self.assertEqual(file_doc.get_content(), "hello")
+		self.mock_s3_client.get_object.assert_called_once_with(Bucket="test-bucket", Key="2026/a.txt")
+
+	def test_get_content_of_public_file_reads_bucket_from_url(self):
+		self.settings.public_bucket_name = "public-bucket"
+		self.mock_s3_client.get_object.return_value = {
+			"Body": MagicMock(read=MagicMock(return_value=b"hello"))
+		}
+		file_doc = self._s3_file("https://s3.local/public-bucket/2026/a.txt")
+
+		self.assertEqual(file_doc.get_content(), "hello")
+		self.mock_s3_client.get_object.assert_called_once_with(Bucket="public-bucket", Key="2026/a.txt")
+
+	def test_get_content_keeps_binary_content_as_bytes(self):
+		self.mock_s3_client.get_object.return_value = {
+			"Body": MagicMock(read=MagicMock(return_value=b"\x89PNG\xff"))
+		}
+		file_doc = self._s3_file("https://s3.local/test-bucket/2026/a.txt")
+
+		self.assertEqual(file_doc.get_content(), b"\x89PNG\xff")
+
+	def test_get_content_of_local_file_uses_core(self):
+		file_doc = controller.S3File({"doctype": "File", "file_name": "a.txt", "content": "local"})
+
+		self.assertEqual(file_doc.get_content(), "local")
+		self.mock_s3_client.get_object.assert_not_called()
+
 
 class TestEndpointUrl(FrappeTestCase):
 	def setUp(self):
@@ -1023,6 +1063,58 @@ class TestProtectS3Fields(FrappeTestCase):
 
 		self.assertEqual(frappe.db.get_value("File", file_doc.name, "file_url"), file_url)
 		self.assertFalse(frappe.db.get_value("File", file_doc.name, "s3_object_key"))
+
+	def _insert_private_s3_original(self, key, file_name):
+		"""Insert a File the way the upload leaves it: with an encoded URL and the key, set without hooks."""
+		file_url = "/api/method/frappe_s3_attachment.controller.generate_file?" + urllib.parse.urlencode(
+			{"key": key, "file_name": file_name}
+		)
+		original = frappe.get_doc(
+			{"doctype": "File", "file_name": file_name, "file_url": file_url, "is_private": 1}
+		).insert()
+		frappe.db.set_value(
+			"File", original.name, {"file_url": file_url, "s3_object_key": key, "is_private": 1}
+		)
+		return file_url
+
+	def test_get_content_of_copy_reads_key_of_original(self):
+		# Core copies attachments with only file_url, e.g. for Communication emails, and unquotes it on insert.
+		file_url = self._insert_private_s3_original("R&D/2026/b+c.txt", "my b & c.txt")
+		copy = frappe.get_doc(
+			{"doctype": "File", "file_name": "my b & c.txt", "file_url": file_url, "is_private": 1}
+		).insert()
+		copy = frappe.get_doc("File", copy.name)
+		self.assertIsInstance(copy, controller.S3File)  # override_doctype_class hook is active
+		self.assertEqual(copy.file_url, file_url)
+		self.assertEqual(copy.is_private, 1)
+		self.assertFalse(copy.s3_object_key)
+
+		with patch("frappe_s3_attachment.controller.S3Operations") as s3_operations:
+			s3 = s3_operations.return_value
+			s3.get_bucket_of_file.return_value = "test-bucket"
+			s3.S3_CLIENT.get_object.return_value = {"Body": MagicMock(read=MagicMock(return_value=b"hello"))}
+			self.assertEqual(copy.get_content(), "hello")
+
+		s3.S3_CLIENT.get_object.assert_called_once_with(Bucket="test-bucket", Key="R&D/2026/b+c.txt")
+
+	def test_insert_copy_of_private_s3_file_checks_access_to_original(self):
+		file_url = self._insert_private_s3_original("copy/2026/secret.txt", "secret.txt")
+		if not frappe.db.exists("User", _PERM_TEST_USER):
+			user = frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": _PERM_TEST_USER,
+					"first_name": "S3 Perm",
+					"send_welcome_email": 0,
+				}
+			).insert()
+			user.add_roles("Desk User")
+
+		frappe.set_user(_PERM_TEST_USER)
+		with self.assertRaises(frappe.PermissionError):
+			frappe.get_doc(
+				{"doctype": "File", "file_name": "secret.txt", "file_url": file_url, "is_private": 1}
+			).insert()
 
 	def test_insert_folder(self):
 		folder = frappe.get_doc(

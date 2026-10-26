@@ -6,6 +6,7 @@ S3_OBJECT_KEY_INDEX_NAME = "s3_object_key_index"
 S3_OBJECT_KEY_LENGTH = 255
 # 191 keeps the index byte size safe under utf8mb4 across MariaDB/MySQL configurations.
 S3_OBJECT_KEY_INDEX_PREFIX = 191
+DEFAULT_IGNORED_DOCTYPES = ("Data Import", "Bank Statement Import")
 
 
 def after_install():
@@ -19,13 +20,20 @@ def after_migrate():
 	ensure_s3_object_key_index()
 
 
-def ensure_default_ignored_doctype():
+def ensure_default_ignored_doctype(doctypes=DEFAULT_IGNORED_DOCTYPES):
 	settings = frappe.get_single("S3 File Attachment")
 	configured_ignored = {row.doctype_name for row in (settings.ignored_doctypes or []) if row.doctype_name}
-	if "Data Import" in configured_ignored:
+	# Bank Statement Import (ERPNext) writes back to the file on disk. The row is a Link, so it must exist.
+	missing = [
+		doctype
+		for doctype in doctypes
+		if doctype not in configured_ignored and frappe.db.exists("DocType", doctype)
+	]
+	if not missing:
 		return
 
-	settings.append("ignored_doctypes", {"doctype_name": "Data Import"})
+	for doctype in missing:
+		settings.append("ignored_doctypes", {"doctype_name": doctype})
 	settings.flags.ignore_mandatory = True
 	settings.save(ignore_permissions=True)
 

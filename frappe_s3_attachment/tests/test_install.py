@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from frappe_s3_attachment import install
 from frappe_s3_attachment.install import (
@@ -14,20 +14,64 @@ from frappe_s3_attachment.install import (
 
 
 class TestInstall(unittest.TestCase):
-	def test_ensure_default_ignored_doctype_appends_data_import_when_missing(self):
+	def test_ensure_default_ignored_doctype_appends_defaults_when_missing(self):
 		settings = MagicMock()
 		settings.ignored_doctypes = []
-		with patch("frappe_s3_attachment.install.frappe.get_single", return_value=settings):
+		with (
+			patch("frappe_s3_attachment.install.frappe.get_single", return_value=settings),
+			patch("frappe_s3_attachment.install.frappe.db.exists", return_value=True),
+		):
+			ensure_default_ignored_doctype()
+
+		self.assertEqual(
+			settings.append.call_args_list,
+			[
+				call("ignored_doctypes", {"doctype_name": "Data Import"}),
+				call("ignored_doctypes", {"doctype_name": "Bank Statement Import"}),
+			],
+		)
+		self.assertTrue(settings.flags.ignore_mandatory)
+		settings.save.assert_called_once_with(ignore_permissions=True)
+
+	def test_ensure_default_ignored_doctype_skips_doctype_that_does_not_exist(self):
+		settings = MagicMock()
+		settings.ignored_doctypes = []
+		with (
+			patch("frappe_s3_attachment.install.frappe.get_single", return_value=settings),
+			patch(
+				"frappe_s3_attachment.install.frappe.db.exists",
+				side_effect=lambda doctype, name: name == "Data Import",
+			),
+		):
 			ensure_default_ignored_doctype()
 
 		settings.append.assert_called_once_with("ignored_doctypes", {"doctype_name": "Data Import"})
-		self.assertTrue(settings.flags.ignore_mandatory)
+		settings.save.assert_called_once_with(ignore_permissions=True)
+
+	def test_bank_statement_import_patch_does_not_add_data_import(self):
+		from frappe_s3_attachment.patches.v0_2_2 import ensure_bank_statement_import_ignored_doctype
+
+		settings = MagicMock()
+		settings.ignored_doctypes = []
+		with (
+			patch("frappe_s3_attachment.install.frappe.get_single", return_value=settings),
+			patch("frappe_s3_attachment.install.frappe.db.exists", return_value=True),
+		):
+			ensure_bank_statement_import_ignored_doctype.execute()
+
+		settings.append.assert_called_once_with("ignored_doctypes", {"doctype_name": "Bank Statement Import"})
 		settings.save.assert_called_once_with(ignore_permissions=True)
 
 	def test_ensure_default_ignored_doctype_noop_when_already_present(self):
 		settings = MagicMock()
-		settings.ignored_doctypes = [MagicMock(doctype_name="Data Import")]
-		with patch("frappe_s3_attachment.install.frappe.get_single", return_value=settings):
+		settings.ignored_doctypes = [
+			MagicMock(doctype_name="Data Import"),
+			MagicMock(doctype_name="Bank Statement Import"),
+		]
+		with (
+			patch("frappe_s3_attachment.install.frappe.get_single", return_value=settings),
+			patch("frappe_s3_attachment.install.frappe.db.exists", return_value=True),
+		):
 			ensure_default_ignored_doctype()
 
 		settings.append.assert_not_called()

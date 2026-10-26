@@ -171,6 +171,18 @@ class TestMinioIntegration(FrappeTestCase):
 		self.assertEqual(frappe.local.response["type"], "redirect")
 		self.assertIn("X-Amz-Expires=300", redirect_url)
 
+	def test_minio_get_content_reads_object(self):
+		for is_private in (1, 0):
+			with self.subTest(is_private=is_private):
+				file_doc = self._create_file_doc(
+					file_name=f"minio-content-{is_private}.txt", content="from s3", is_private=is_private
+				)
+				controller.file_upload_to_s3(file_doc, "after_insert")
+				file_doc = frappe.get_doc("File", file_doc.name)
+				self._assert_object_exists(file_doc.s3_object_key)
+
+				self.assertEqual(file_doc.get_content(), "from s3")
+
 	def test_minio_delete_from_cloud_removes_object(self):
 		file_doc = self._create_file_doc(file_name="minio-delete.txt", content="delete", is_private=1)
 		controller.file_upload_to_s3(file_doc, "after_insert")
