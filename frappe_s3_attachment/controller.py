@@ -2,11 +2,12 @@ import datetime
 import hashlib
 import mimetypes
 import os
-import random
 import re
+import secrets
 import string
 import unicodedata
 import urllib.parse
+from functools import cached_property
 
 import boto3
 import filetype
@@ -15,6 +16,7 @@ from boto3.s3.transfer import TransferConfig
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from frappe import _
+from frappe.core.doctype.access_log.access_log import make_access_log
 from frappe.core.doctype.file.utils import generate_file_name
 from frappe.utils import cint, get_files_path, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
@@ -46,12 +48,19 @@ MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
 class S3Operations:
 	def __init__(self):
 		"""
-		Function to initialise the S3 client from the S3 File Attachment singleton.
+		Function to load the S3 File Attachment singleton.
 		"""
 		self.s3_settings_doc = frappe.get_doc(
 			"S3 File Attachment",
 			"S3 File Attachment",
 		)
+		self.BUCKET = self.s3_settings_doc.bucket_name
+		self.PUBLIC_BUCKET = self.s3_settings_doc.public_bucket_name
+		self.folder_name = self.s3_settings_doc.folder_name
+
+	# Created on first use, so files that stay local do not need credentials.
+	@cached_property
+	def S3_CLIENT(self):
 		config_kwargs = {"signature_version": "s3v4"}
 		client_kwargs = dict(
 			region_name=self.s3_settings_doc.region_name,
@@ -62,18 +71,23 @@ class S3Operations:
 			client_kwargs["endpoint_url"] = endpoint_url
 			config_kwargs["s3"] = {"addressing_style": "path"}
 
-		# use credentials from the S3 File Attachment singleton, if available
-		# otherwise fall back to boto3 default credential resolution
+		# The boto3 default credential chain can resolve to the host's identity, which all sites
+		# on the bench share. Use it only if the site config opts in.
 		secret = self.s3_settings_doc.get_password("secret_key", raise_exception=False)
 		if self.s3_settings_doc.access_key and secret:
 			client_kwargs["aws_access_key_id"] = self.s3_settings_doc.access_key
 			client_kwargs["aws_secret_access_key"] = secret
+		elif not frappe.conf.get("s3_use_default_credentials"):
+			frappe.throw(
+				_("Set {0} and {1} in {2}.").format(
+					frappe.bold(_("Access Key")),
+					frappe.bold(_("Secret Key")),
+					frappe.bold(_("S3 File Attachment")),
+				)
+			)
 
 		client_kwargs["config"] = Config(**config_kwargs)
-		self.S3_CLIENT = boto3.client("s3", **client_kwargs)
-		self.BUCKET = self.s3_settings_doc.bucket_name
-		self.PUBLIC_BUCKET = self.s3_settings_doc.public_bucket_name
-		self.folder_name = self.s3_settings_doc.folder_name
+		return boto3.client("s3", **client_kwargs)
 
 	def get_bucket(self, is_private):
 		"""Return the bucket for new uploads: *Public Bucket Name* for public files, if set."""
@@ -158,7 +172,7 @@ class S3Operations:
 
 		file_name = file_name.replace(" ", "_")
 		file_name = self.strip_special_chars(file_name)
-		prefix = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+		prefix = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
 
 		today = datetime.datetime.now()
 		year = today.strftime("%Y")
@@ -227,7 +241,8 @@ class S3Operations:
 			try:
 				self.S3_CLIENT.delete_object(Bucket=bucket, Key=key)
 			except ClientError:
-				frappe.throw(_("Access denied: Could not delete file"))
+				# This runs after commit, so the File is already deleted. The object left behind only uses storage.
+				frappe.log_error(title=_("Could not delete S3 object {0}").format(key), defer_insert=True)
 
 	def read_file_from_s3(self, key):
 		"""
@@ -300,7 +315,8 @@ def file_upload_to_s3(doc, _method, callback=None):
 
 		if doc.is_private:
 			generate_method = "frappe_s3_attachment.controller.generate_file"
-			file_url = f"""/api/method/{generate_method}?key={key}&file_name={doc.file_name}"""
+			query = urllib.parse.urlencode({"key": key, "file_name": doc.file_name})
+			file_url = f"/api/method/{generate_method}?{query}"
 		else:
 			file_url = f"{s3_upload.S3_CLIENT.meta.endpoint_url}/{s3_upload.get_bucket(doc.is_private)}/{key}"
 
@@ -357,6 +373,8 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 	signed_url = s3_upload.get_url(key, file_docs[0].file_name)
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = signed_url
+	file_type = os.path.splitext(file_docs[0].file_name)[1][1:]
+	make_access_log(doctype="File", document=file_docs[0].name, file_type=file_type)
 	return
 
 
@@ -404,7 +422,7 @@ def run_migrate_existing_files():
 			frappe.db.commit()
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def migrate_existing_files():
 	"""Queue migration of local **File** records to S3 on the long worker queue."""
 	frappe.only_for("System Manager")
@@ -466,12 +484,23 @@ def protect_s3_fields(doc, method):
 
 
 def delete_from_cloud(doc, method):
-	"""Delete file from s3"""
+	"""Delete the S3 object after commit, unless another **File** still uses it."""
 	if not doc.get("s3_object_key"):
 		return
-	s3 = S3Operations()
-	bucket = s3.get_bucket_of_file(doc.file_url, doc.s3_object_key)
-	s3.delete_from_s3(doc.s3_object_key, bucket)
+	key = doc.s3_object_key
+	file_url = doc.file_url
+
+	def delete_unused_object():
+		s3 = S3Operations()
+		bucket = s3.get_bucket_of_file(file_url, key)
+		# A custom s3_key_generator can give several files the same key, in one or both buckets.
+		# Check the committed rows, because a replacement File can get the same key in the same request.
+		other_file_urls = frappe.get_all("File", filters={"s3_object_key": key}, pluck="file_url")
+		if bucket not in {s3.get_bucket_of_file(url, key) for url in other_file_urls}:
+			s3.delete_from_s3(key, bucket)
+
+	# Delete after commit, so a rollback cannot leave a File without its object.
+	frappe.db.after_commit.add(delete_unused_object)
 
 
 @frappe.whitelist(methods=["POST"])
