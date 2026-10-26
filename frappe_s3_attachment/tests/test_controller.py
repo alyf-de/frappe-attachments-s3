@@ -1,5 +1,6 @@
 import re
 import urllib.parse
+from functools import partial
 from unittest.mock import MagicMock, call, patch
 
 import frappe
@@ -17,9 +18,9 @@ def _filetype_kind(mime):
 
 
 def _make_settings(**overrides):
-	secret_password = overrides.pop("_secret_password", "")
+	secret_password = overrides.pop("_secret_password", "test-secret-key")
 	merged = {
-		"access_key": "",
+		"access_key": "test-access-key",
 		"endpoint_url": "",
 		"region_name": "fsn1",
 		"bucket_name": "test-bucket",
@@ -335,6 +336,14 @@ class TestControllerCharacterization(FrappeTestCase):
 		enqueue_fn.assert_called_once()
 		self.assertEqual(result, {"job_id": namespaced_job_id, "queued": False})
 
+	def test_enqueue_move_file_rejects_second_job_for_same_file(self):
+		with patch("frappe_s3_attachment.controller.enqueue", return_value=None) as enqueue_fn:
+			with self.assertRaises(frappe.ValidationError):
+				controller.enqueue_move_file("F-1", to_s3=True)
+		enqueue_fn.assert_called_once()
+		self.assertEqual(enqueue_fn.call_args.kwargs["job_id"], "frappe_s3_attachment.move_file::F-1")
+		self.assertTrue(enqueue_fn.call_args.kwargs["deduplicate"])
+
 	def test_upload_public_sets_acl_public_read(self):
 		with patch(
 			"frappe_s3_attachment.controller.filetype.guess",
@@ -505,6 +514,38 @@ class TestControllerCharacterization(FrappeTestCase):
 			]
 		)
 
+	def test_file_upload_to_s3_encodes_private_url(self):
+		doc = frappe._dict(
+			{
+				"name": "FILE-TEST-ENCODE",
+				"file_url": "/private/files/a&b #1?+.pdf",
+				"attached_to_doctype": None,
+				"attached_to_name": None,
+				"file_name": "a&b #1?+.pdf",
+				"is_private": 1,
+			}
+		)
+		key = "2026/05/08/Sales Invoice/AAAAAAAA_ab_1.pdf"
+		mock_s3_ops = MagicMock()
+		mock_s3_ops.is_ignored_doctype.return_value = False
+		mock_s3_ops.upload_files_to_s3_with_key.return_value = key
+		# The real URL builder, because this test checks its encoding.
+		mock_s3_ops.get_file_url = partial(controller.S3Operations.get_file_url, mock_s3_ops)
+		with (
+			patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops),
+			patch("frappe_s3_attachment.controller.os.remove"),
+			patch("frappe_s3_attachment.controller.frappe.db.commit"),
+			patch("frappe_s3_attachment.controller.frappe.db.set_value"),
+		):
+			controller.file_upload_to_s3(doc, "after_insert")
+
+		parsed_url = urllib.parse.urlparse(doc.file_url)
+		self.assertEqual(parsed_url.path, "/api/method/frappe_s3_attachment.controller.generate_file")
+		self.assertEqual(
+			urllib.parse.parse_qs(parsed_url.query),
+			{"key": [key], "file_name": ["a&b #1?+.pdf"]},
+		)
+
 	def test_move_to_s3_keeps_other_parent_image(self):
 		doc = frappe._dict(
 			{
@@ -547,6 +588,7 @@ class TestControllerCharacterization(FrappeTestCase):
 			}
 		)
 		controller.delete_from_cloud(doc, "on_trash")
+		frappe.db.after_commit.run()
 		self.mock_s3_client.delete_object.assert_called_once_with(
 			Bucket="test-bucket", Key="shop/path/logo.png"
 		)
@@ -564,6 +606,7 @@ class TestControllerCharacterization(FrappeTestCase):
 				self.mock_s3_client.reset_mock()
 				doc = frappe._dict({"s3_object_key": "2026/logo.png", "file_url": file_url})
 				controller.delete_from_cloud(doc, "on_trash")
+				frappe.db.after_commit.run()
 				self.mock_s3_client.delete_object.assert_called_once_with(Bucket=bucket, Key="2026/logo.png")
 
 	def test_delete_from_cloud_keeps_bucket_after_public_bucket_setting_changes(self):
@@ -575,6 +618,7 @@ class TestControllerCharacterization(FrappeTestCase):
 				self.mock_s3_client.reset_mock()
 				doc = frappe._dict({"s3_object_key": "2026/logo.png", "file_url": file_url})
 				controller.delete_from_cloud(doc, "on_trash")
+				frappe.db.after_commit.run()
 				self.mock_s3_client.delete_object.assert_called_once_with(
 					Bucket="old-public-bucket", Key="2026/logo.png"
 				)
@@ -585,6 +629,7 @@ class TestControllerCharacterization(FrappeTestCase):
 			{"s3_object_key": "2026/logo.png", "file_url": "https://other.example/other-bucket/2026/logo.png"}
 		)
 		controller.delete_from_cloud(doc, "on_trash")
+		frappe.db.after_commit.run()
 		self.mock_s3_client.delete_object.assert_called_once_with(Bucket="test-bucket", Key="2026/logo.png")
 
 	def test_delete_from_cloud_skips_when_no_s3_object_key(self):
@@ -605,7 +650,10 @@ class TestControllerCharacterization(FrappeTestCase):
 
 		with patch("frappe_s3_attachment.controller.frappe.db.get_value") as db_get_value:
 			db_get_value.return_value = "FILE-LOOKUP-1"
-			with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=selective_get_doc):
+			with (
+				patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=selective_get_doc),
+				patch("frappe_s3_attachment.controller.make_access_log"),
+			):
 				frappe.local.response = frappe._dict()
 				self.mock_s3_client.generate_presigned_url.return_value = "https://signed.example/x"
 				controller.generate_file(key="some/s3/key", file_name="x.pdf")
@@ -646,7 +694,7 @@ class TestEndpointUrl(FrappeTestCase):
 	def test_endpoint_url_threaded_when_set(self):
 		self.settings.endpoint_url = "https://fsn1.your-objectstorage.com"
 
-		controller.S3Operations()
+		controller.S3Operations().S3_CLIENT
 
 		_, kwargs = controller.boto3.client.call_args
 		self.assertEqual(kwargs.get("endpoint_url"), "https://fsn1.your-objectstorage.com")
@@ -655,11 +703,73 @@ class TestEndpointUrl(FrappeTestCase):
 	def test_endpoint_url_omitted_when_blank(self):
 		self.settings.endpoint_url = ""
 
-		controller.S3Operations()
+		controller.S3Operations().S3_CLIENT
 
 		_, kwargs = controller.boto3.client.call_args
 		self.assertNotIn("endpoint_url", kwargs)
 		self.assertEqual(kwargs["config"].s3, None)
+
+
+class TestCredentials(FrappeTestCase):
+	def setUp(self):
+		super().setUp()
+		self.patch_boto3_client = patch("frappe_s3_attachment.controller.boto3.client")
+		self.patch_boto3_client.start()
+		self.addCleanup(self.patch_boto3_client.stop)
+
+	def _make_client(self, settings):
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", return_value=settings):
+			return controller.S3Operations().S3_CLIENT
+
+	def test_keys_from_settings(self):
+		self._make_client(_make_settings())
+
+		_, kwargs = controller.boto3.client.call_args
+		self.assertEqual(kwargs["aws_access_key_id"], "test-access-key")
+		self.assertEqual(kwargs["aws_secret_access_key"], "test-secret-key")
+
+	def test_missing_keys_do_not_use_default_credentials(self):
+		settings = _make_settings(access_key="", _secret_password="")
+
+		with patch.dict(frappe.local.conf, {"s3_use_default_credentials": 0}):
+			with self.assertRaises(frappe.ValidationError):
+				self._make_client(settings)
+		controller.boto3.client.assert_not_called()
+
+	def test_missing_keys_use_default_credentials_if_site_config_opts_in(self):
+		settings = _make_settings(access_key="", _secret_password="")
+
+		with patch.dict(frappe.local.conf, {"s3_use_default_credentials": 1}):
+			self._make_client(settings)
+
+		_, kwargs = controller.boto3.client.call_args
+		self.assertNotIn("aws_access_key_id", kwargs)
+		self.assertNotIn("aws_secret_access_key", kwargs)
+
+	def test_missing_keys_keep_ignored_attachments_local(self):
+		settings = _make_settings(
+			access_key="",
+			_secret_password="",
+			ignored_doctypes=[frappe._dict({"doctype_name": "Data Import"})],
+		)
+		doc = frappe._dict(
+			{
+				"file_url": "/private/files/import.csv",
+				"attached_to_doctype": "Data Import",
+				"attached_to_name": "DI-1",
+				"file_name": "import.csv",
+				"is_private": 1,
+			}
+		)
+
+		with (
+			patch.dict(frappe.local.conf, {"s3_use_default_credentials": 0}),
+			patch("frappe_s3_attachment.controller.frappe.get_doc", return_value=settings),
+		):
+			controller.file_upload_to_s3(doc, "after_insert")
+
+		self.assertEqual(doc.file_url, "/private/files/import.csv")
+		controller.boto3.client.assert_not_called()
 
 
 class TestNonAsciiFilenames(FrappeTestCase):
@@ -778,9 +888,15 @@ class TestGenerateFilePermissions(FrappeTestCase):
 		frappe.db.set_value("File", f.name, "s3_object_key", "deny-key-perm-test")
 		self._ensure_perm_test_user()
 		frappe.set_user(_PERM_TEST_USER)
+		frappe.flags.error_message = None
+		frappe.local.message_log = []
 		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
 			with self.assertRaises(frappe.PermissionError):
 				controller.generate_file(key="deny-key-perm-test", file_name="secret.txt")
+
+		# The response must not name the File, or it differs from the response for an unknown key.
+		self.assertIsNone(frappe.flags.error_message)
+		self.assertEqual(frappe.local.message_log, [])
 
 	def test_generate_file_redirects_when_authorized(self):
 		self._ensure_perm_test_user()
@@ -822,10 +938,39 @@ class TestGenerateFilePermissions(FrappeTestCase):
 		params = self.mock_s3_client.generate_presigned_url.call_args.kwargs["Params"]
 		self.assertEqual(params["ResponseContentDisposition"], "attachment; filename*=UTF-8''logo.svg")
 
-	def test_generate_file_missing_key_raises_does_not_exist(self):
+	def test_generate_file_logs_access(self):
+		frappe.set_user("Administrator")
+		f = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": "report.txt",
+				"content": "z",
+				"is_private": 1,
+			}
+		).insert()
+		frappe.db.set_value("File", f.name, "s3_object_key", "log-key-perm-test")
+
+		frappe.local.response = frappe._dict()
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
+			controller.generate_file(key="log-key-perm-test")
+
+		self.assertTrue(
+			frappe.db.exists(
+				"Access Log",
+				{
+					"user": "Administrator",
+					"export_from": "File",
+					"reference_document": f.name,
+					"file_type": "txt",
+				},
+			)
+		)
+
+	def test_generate_file_missing_key_raises_permission_error(self):
+		"""An unknown key must look the same as a denied key, so callers cannot probe which keys exist."""
 		frappe.set_user("Administrator")
 		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
-			with self.assertRaises(frappe.DoesNotExistError):
+			with self.assertRaises(frappe.PermissionError):
 				controller.generate_file(key="no-such-file-row-key-zzz")
 
 
