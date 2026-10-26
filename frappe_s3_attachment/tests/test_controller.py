@@ -30,7 +30,7 @@ def _make_settings(**overrides):
 		"folder_name": "",
 		"ignored_doctypes": [],
 		"signed_url_expiry_time": 300,
-		"delete_file_from_cloud": 0,
+		"delete_file_from_cloud": 1,
 	}
 	merged.update({k: v for k, v in overrides.items() if k != "_secret_password"})
 	settings = frappe._dict(merged)
@@ -442,6 +442,10 @@ class TestControllerCharacterization(FrappeTestCase):
 
 		call = self.mock_s3_client.upload_file.call_args
 		self.assertEqual(call.kwargs["ExtraArgs"]["ContentType"], "text/csv")
+
+	def test_delete_file_from_cloud_defaults_to_enabled(self):
+		meta = frappe.get_meta("S3 File Attachment")
+		self.assertEqual(meta.get_field("delete_file_from_cloud").default, "1")
 
 	def test_delete_from_s3_no_op_when_flag_disabled(self):
 		self.settings.delete_file_from_cloud = 0
