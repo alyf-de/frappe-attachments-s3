@@ -782,9 +782,15 @@ class TestGenerateFilePermissions(FrappeTestCase):
 		frappe.db.set_value("File", f.name, "s3_object_key", "deny-key-perm-test")
 		self._ensure_perm_test_user()
 		frappe.set_user(_PERM_TEST_USER)
+		frappe.flags.error_message = None
+		frappe.local.message_log = []
 		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
 			with self.assertRaises(frappe.PermissionError):
 				controller.generate_file(key="deny-key-perm-test", file_name="secret.txt")
+
+		# The response must not name the File, or it differs from the response for an unknown key.
+		self.assertIsNone(frappe.flags.error_message)
+		self.assertEqual(frappe.local.message_log, [])
 
 	def test_generate_file_redirects_when_authorized(self):
 		self._ensure_perm_test_user()
