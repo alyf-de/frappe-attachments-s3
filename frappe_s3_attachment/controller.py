@@ -525,32 +525,29 @@ def update_privacy_in_cloud(doc, method):
 	source_bucket = s3.get_bucket_of_file(old_file_url, key)
 	target_bucket = s3.get_bucket(doc.is_private)
 
-	def buckets_of_other_files():
-		# A custom s3_key_generator can give several files the same key, in one or both buckets.
-		other_file_urls = frappe.get_all(
-			"File", filters={"s3_object_key": key, "name": ["!=", doc.name]}, pluck="file_url"
+	# The callbacks below read the rows after commit or rollback, not the values of this save:
+	# a second save in the same transaction can move the file back.
+	def restore_acl():
+		is_private = frappe.db.get_value("File", doc.name, "is_private")
+		s3.S3_CLIENT.put_object_acl(
+			Bucket=target_bucket, Key=key, ACL="private" if is_private else "public-read"
 		)
-		return {s3.get_bucket_of_file(url, key) for url in other_file_urls}
+
+	def delete_if_unused(bucket):
+		file_urls = frappe.get_all("File", filters={"s3_object_key": key}, pluck="file_url")
+		if bucket not in {s3.get_bucket_of_file(url, key) for url in file_urls}:
+			s3.S3_CLIENT.delete_object(Bucket=bucket, Key=key)
 
 	if source_bucket == target_bucket:
-		new_acl, old_acl = ("private", "public-read") if doc.is_private else ("public-read", "private")
+		new_acl = "private" if doc.is_private else "public-read"
 		s3.S3_CLIENT.put_object_acl(Bucket=target_bucket, Key=key, ACL=new_acl)
-		frappe.db.after_rollback.add(
-			partial(s3.S3_CLIENT.put_object_acl, Bucket=target_bucket, Key=key, ACL=old_acl)
-		)
+		frappe.db.after_rollback.add(restore_acl)
 	else:
-		target_is_used = target_bucket in buckets_of_other_files()
 		# The copy keeps content type and metadata, and gets the default (private) object ACL.
 		s3.S3_CLIENT.copy({"Bucket": source_bucket, "Key": key}, target_bucket, key)
-		if not target_is_used:
-			frappe.db.after_rollback.add(partial(s3.S3_CLIENT.delete_object, Bucket=target_bucket, Key=key))
-
-		def delete_source_object():
-			if source_bucket not in buckets_of_other_files():
-				s3.S3_CLIENT.delete_object(Bucket=source_bucket, Key=key)
-
+		frappe.db.after_rollback.add(partial(delete_if_unused, target_bucket))
 		# Delete only after the commit, so a failed save cannot lose the file.
-		frappe.db.after_commit.add(delete_source_object)
+		frappe.db.after_commit.add(partial(delete_if_unused, source_bucket))
 
 	file_url = s3.get_file_url(key, doc.file_name, doc.is_private)
 	doc.db_set("file_url", file_url, update_modified=False)

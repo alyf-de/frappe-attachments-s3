@@ -403,3 +403,35 @@ class TestMinioIntegration(FrappeTestCase):
 		self.minio_client.head_object(Bucket=public_bucket, Key=key)
 		with self.assertRaises(ClientError):
 			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
+
+	def _toggle_twice_in_one_transaction(self):
+		public_bucket = self._use_public_bucket()
+		file_doc = self._create_file_doc(file_name="minio-toggle-twice.txt", content="twice", is_private=0)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		key = file_doc.s3_object_key
+		self.addCleanup(self.minio_client.delete_object, Bucket=public_bucket, Key=key)
+		self.uploaded_keys.add(key)
+		frappe.db.commit()
+
+		file_doc.is_private = 1
+		file_doc.save()
+		file_doc.is_private = 0
+		file_doc.save()
+		return public_bucket, key
+
+	def test_minio_toggle_twice_and_commit_keeps_final_object(self):
+		public_bucket, key = self._toggle_twice_in_one_transaction()
+		frappe.db.commit()
+
+		self.minio_client.head_object(Bucket=public_bucket, Key=key)
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
+
+	def test_minio_toggle_twice_and_rollback_keeps_first_object(self):
+		public_bucket, key = self._toggle_twice_in_one_transaction()
+		frappe.db.rollback()
+
+		self.minio_client.head_object(Bucket=public_bucket, Key=key)
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
