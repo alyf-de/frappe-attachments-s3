@@ -515,6 +515,11 @@ def update_privacy_in_cloud(doc, method):
 		return
 
 	key = doc.s3_object_key
+	# A custom s3_key_generator, or a key forged before validation existed, can give several files
+	# one object. Its ACL or bucket would then change for all of them.
+	if frappe.db.exists("File", {"s3_object_key": key, "name": ["!=", doc.name]}):
+		frappe.throw(_("This file shares its S3 object with other files, so you cannot change its privacy."))
+
 	s3 = S3Operations()
 	old_file_url = doc.file_url
 	source_bucket = s3.get_bucket_of_file(old_file_url, key)

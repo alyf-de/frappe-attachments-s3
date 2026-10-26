@@ -383,25 +383,23 @@ class TestMinioIntegration(FrappeTestCase):
 		with self.assertRaises(ClientError):
 			self.minio_client.head_object(Bucket=public_bucket, Key=key)
 
-	def test_minio_failed_make_private_keeps_object_of_other_file(self):
+	def test_minio_privacy_change_of_shared_object_is_rejected(self):
 		public_bucket = self._use_public_bucket()
 		file_doc = self._create_file_doc(file_name="minio-shared-toggle.txt", content="shared", is_private=0)
 		controller.file_upload_to_s3(file_doc, "after_insert")
 		file_doc.reload()
 		key = file_doc.s3_object_key
 		self.addCleanup(self.minio_client.delete_object, Bucket=public_bucket, Key=key)
+		self.uploaded_keys.add(key)
 		other_doc = self._create_file_doc(
 			file_name="minio-shared-toggle-2.txt", content="other", is_private=0
 		)
 		other_doc.db_set({"s3_object_key": key, "file_url": file_doc.file_url})
+
 		file_doc.is_private = 1
-		file_doc.save()
-		frappe.db.commit()
+		with self.assertRaises(frappe.ValidationError):
+			file_doc.save()
 
-		other_doc.reload()
-		other_doc.is_private = 1
-		other_doc.save()
-		frappe.db.rollback()
-
-		self._assert_object_exists(key)
 		self.minio_client.head_object(Bucket=public_bucket, Key=key)
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
