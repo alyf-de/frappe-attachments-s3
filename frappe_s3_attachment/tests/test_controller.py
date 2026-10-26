@@ -506,6 +506,36 @@ class TestControllerCharacterization(FrappeTestCase):
 			]
 		)
 
+	def test_file_upload_to_s3_encodes_private_url(self):
+		doc = frappe._dict(
+			{
+				"name": "FILE-TEST-ENCODE",
+				"file_url": "/private/files/a&b #1?+.pdf",
+				"attached_to_doctype": None,
+				"attached_to_name": None,
+				"file_name": "a&b #1?+.pdf",
+				"is_private": 1,
+			}
+		)
+		key = "2026/05/08/Sales Invoice/AAAAAAAA_ab_1.pdf"
+		mock_s3_ops = MagicMock()
+		mock_s3_ops.is_ignored_doctype.return_value = False
+		mock_s3_ops.upload_files_to_s3_with_key.return_value = key
+		with (
+			patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops),
+			patch("frappe_s3_attachment.controller.os.remove"),
+			patch("frappe_s3_attachment.controller.frappe.db.commit"),
+			patch("frappe_s3_attachment.controller.frappe.db.set_value"),
+		):
+			controller.file_upload_to_s3(doc, "after_insert")
+
+		parsed_url = urllib.parse.urlparse(doc.file_url)
+		self.assertEqual(parsed_url.path, "/api/method/frappe_s3_attachment.controller.generate_file")
+		self.assertEqual(
+			urllib.parse.parse_qs(parsed_url.query),
+			{"key": [key], "file_name": ["a&b #1?+.pdf"]},
+		)
+
 	def test_move_to_s3_keeps_other_parent_image(self):
 		doc = frappe._dict(
 			{

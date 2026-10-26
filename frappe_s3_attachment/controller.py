@@ -2,8 +2,8 @@ import datetime
 import hashlib
 import mimetypes
 import os
-import random
 import re
+import secrets
 import string
 import unicodedata
 import urllib.parse
@@ -158,7 +158,7 @@ class S3Operations:
 
 		file_name = file_name.replace(" ", "_")
 		file_name = self.strip_special_chars(file_name)
-		prefix = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+		prefix = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
 
 		today = datetime.datetime.now()
 		year = today.strftime("%Y")
@@ -296,7 +296,8 @@ def file_upload_to_s3(doc, _method, callback=None):
 
 		if doc.is_private:
 			generate_method = "frappe_s3_attachment.controller.generate_file"
-			file_url = f"""/api/method/{generate_method}?key={key}&file_name={doc.file_name}"""
+			query = urllib.parse.urlencode({"key": key, "file_name": doc.file_name})
+			file_url = f"/api/method/{generate_method}?{query}"
 		else:
 			file_url = f"{s3_upload.S3_CLIENT.meta.endpoint_url}/{s3_upload.get_bucket(doc.is_private)}/{key}"
 
