@@ -606,7 +606,10 @@ class TestControllerCharacterization(FrappeTestCase):
 
 		with patch("frappe_s3_attachment.controller.frappe.db.get_value") as db_get_value:
 			db_get_value.return_value = "FILE-LOOKUP-1"
-			with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=selective_get_doc):
+			with (
+				patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=selective_get_doc),
+				patch("frappe_s3_attachment.controller.make_access_log"),
+			):
 				frappe.local.response = frappe._dict()
 				self.mock_s3_client.generate_presigned_url.return_value = "https://signed.example/x"
 				controller.generate_file(key="some/s3/key", file_name="x.pdf")
@@ -823,10 +826,39 @@ class TestGenerateFilePermissions(FrappeTestCase):
 		params = self.mock_s3_client.generate_presigned_url.call_args.kwargs["Params"]
 		self.assertEqual(params["ResponseContentDisposition"], "attachment; filename*=UTF-8''logo.svg")
 
-	def test_generate_file_missing_key_raises_does_not_exist(self):
+	def test_generate_file_logs_access(self):
+		frappe.set_user("Administrator")
+		f = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": "report.pdf",
+				"content": "z",
+				"is_private": 1,
+			}
+		).insert()
+		frappe.db.set_value("File", f.name, "s3_object_key", "log-key-perm-test")
+
+		frappe.local.response = frappe._dict()
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
+			controller.generate_file(key="log-key-perm-test")
+
+		self.assertTrue(
+			frappe.db.exists(
+				"Access Log",
+				{
+					"user": "Administrator",
+					"export_from": "File",
+					"reference_document": f.name,
+					"file_type": "pdf",
+				},
+			)
+		)
+
+	def test_generate_file_missing_key_raises_permission_error(self):
+		"""An unknown key must look the same as a denied key, so callers cannot probe which keys exist."""
 		frappe.set_user("Administrator")
 		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
-			with self.assertRaises(frappe.DoesNotExistError):
+			with self.assertRaises(frappe.PermissionError):
 				controller.generate_file(key="no-such-file-row-key-zzz")
 
 
