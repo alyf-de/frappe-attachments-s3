@@ -180,6 +180,22 @@ class TestMinioIntegration(FrappeTestCase):
 			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
 		self.uploaded_keys.discard(key)
 
+	def test_minio_delete_from_cloud_keeps_object_on_rollback(self):
+		file_doc = self._create_file_doc(
+			file_name="minio-delete-rollback.txt", content="rollback", is_private=1
+		)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		self.settings = self._build_settings(delete_file_from_cloud=1)
+		key = file_doc.s3_object_key
+
+		frappe.delete_doc("File", file_doc.name)
+		frappe.db.rollback()
+		frappe.db.commit()
+
+		self.assertTrue(frappe.db.exists("File", file_doc.name))
+		self._assert_object_exists(key)
+
 	def test_minio_delete_from_cloud_keeps_object_used_by_other_file(self):
 		file_doc = self._create_file_doc(file_name="minio-delete-shared.txt", content="shared", is_private=1)
 		controller.file_upload_to_s3(file_doc, "after_insert")
