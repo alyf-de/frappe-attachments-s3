@@ -684,8 +684,9 @@ class TestCredentials(FrappeTestCase):
 	def test_missing_keys_do_not_use_default_credentials(self):
 		settings = _make_settings(access_key="", _secret_password="")
 
-		with self.assertRaises(frappe.ValidationError):
-			self._make_s3_operations(settings)
+		with patch.dict(frappe.local.conf, {"s3_use_default_credentials": 0}):
+			with self.assertRaises(frappe.ValidationError):
+				self._make_s3_operations(settings)
 		controller.boto3.client.assert_not_called()
 
 	def test_missing_keys_use_default_credentials_if_site_config_opts_in(self):
