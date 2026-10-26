@@ -443,16 +443,19 @@ def delete_from_cloud(doc, method):
 	if not doc.get("s3_object_key"):
 		return
 	key = doc.s3_object_key
-	s3 = S3Operations()
-	bucket = s3.get_bucket_of_file(doc.file_url, key)
-	# A custom s3_key_generator can give several files the same key, in one or both buckets.
-	other_file_urls = frappe.get_all(
-		"File", filters={"s3_object_key": key, "name": ["!=", doc.name]}, pluck="file_url"
-	)
-	if bucket in {s3.get_bucket_of_file(url, key) for url in other_file_urls}:
-		return
+	file_url = doc.file_url
+
+	def delete_unused_object():
+		s3 = S3Operations()
+		bucket = s3.get_bucket_of_file(file_url, key)
+		# A custom s3_key_generator can give several files the same key, in one or both buckets.
+		# Check the committed rows, because a replacement File can get the same key in the same request.
+		other_file_urls = frappe.get_all("File", filters={"s3_object_key": key}, pluck="file_url")
+		if bucket not in {s3.get_bucket_of_file(url, key) for url in other_file_urls}:
+			s3.delete_from_s3(key, bucket)
+
 	# Delete after commit, so a rollback cannot leave a File without its object.
-	frappe.db.after_commit.add(lambda: s3.delete_from_s3(key, bucket))
+	frappe.db.after_commit.add(delete_unused_object)
 
 
 @frappe.whitelist(methods=["POST"])
