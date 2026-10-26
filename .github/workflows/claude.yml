@@ -138,7 +138,8 @@ jobs:
           bot_id: ${{ vars.CLAUDE_BOT_ID }}
           claude_args: >-
             --add-dir /home/runner/frappe-bench
-            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(cd *),Bash(bench *),Bash(git *),Bash(gh issue view *),Bash(gh issue comment *),Bash(gh pr create *)"
+            --permission-mode auto
+            --model opus
           prompt: |
             Resolve issue #${{ github.event.issue.number }} in ${{ github.repository }}.
             Read it with `gh issue view ${{ github.event.issue.number }} --comments`.
