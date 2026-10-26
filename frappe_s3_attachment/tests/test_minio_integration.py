@@ -279,6 +279,7 @@ class TestMinioIntegration(FrappeTestCase):
 
 		file_doc.is_private = 1
 		file_doc.save()
+		frappe.db.commit()
 
 		file_doc.reload()
 		self.assertIn("controller.generate_file?key=", file_doc.file_url)
@@ -288,6 +289,7 @@ class TestMinioIntegration(FrappeTestCase):
 
 		file_doc.is_private = 0
 		file_doc.save()
+		frappe.db.commit()
 
 		file_doc.reload()
 		self.assertEqual(file_doc.file_url, f"{self.endpoint_url}/{public_bucket}/{key}")
@@ -307,3 +309,21 @@ class TestMinioIntegration(FrappeTestCase):
 		file_doc.reload()
 		self.assertIn("controller.generate_file?key=", file_doc.file_url)
 		self._assert_object_exists(key)
+
+	def test_minio_failed_make_public_removes_public_copy(self):
+		public_bucket = f"{self.bucket_name}-public"
+		if public_bucket not in {b["Name"] for b in self.minio_client.list_buckets()["Buckets"]}:
+			self.minio_client.create_bucket(Bucket=public_bucket)
+		self.settings.public_bucket_name = public_bucket
+		file_doc = self._create_file_doc(file_name="minio-toggle-fail.txt", content="fail", is_private=1)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		key = file_doc.s3_object_key
+
+		file_doc.is_private = 0
+		file_doc.save()
+		frappe.db.rollback()
+
+		self._assert_object_exists(key)
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=public_bucket, Key=key)

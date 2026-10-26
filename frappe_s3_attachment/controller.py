@@ -7,6 +7,7 @@ import re
 import string
 import unicodedata
 import urllib.parse
+from functools import partial
 
 import boto3
 import filetype
@@ -463,12 +464,24 @@ def update_privacy_in_cloud(doc, method):
 	source_bucket = s3.get_bucket_of_file(old_file_url, key)
 	target_bucket = s3.get_bucket(doc.is_private)
 	if source_bucket == target_bucket:
-		acl = "private" if doc.is_private else "public-read"
-		s3.S3_CLIENT.put_object_acl(Bucket=target_bucket, Key=key, ACL=acl)
+		new_acl, old_acl = ("private", "public-read") if doc.is_private else ("public-read", "private")
+		s3.S3_CLIENT.put_object_acl(Bucket=target_bucket, Key=key, ACL=new_acl)
+		frappe.db.after_rollback.add(
+			partial(s3.S3_CLIENT.put_object_acl, Bucket=target_bucket, Key=key, ACL=old_acl)
+		)
 	else:
 		# The copy keeps content type and metadata, and gets the default (private) object ACL.
 		s3.S3_CLIENT.copy({"Bucket": source_bucket, "Key": key}, target_bucket, key)
-		s3.S3_CLIENT.delete_object(Bucket=source_bucket, Key=key)
+		frappe.db.after_rollback.add(partial(s3.S3_CLIENT.delete_object, Bucket=target_bucket, Key=key))
+
+		def delete_source_object():
+			# Keep an object that another File still uses, like move_file_to_local.
+			other_file_urls = frappe.get_all("File", filters={"s3_object_key": key}, pluck="file_url")
+			if source_bucket not in {s3.get_bucket_of_file(url, key) for url in other_file_urls}:
+				s3.S3_CLIENT.delete_object(Bucket=source_bucket, Key=key)
+
+		# Delete only after the commit, so a failed save cannot lose the file.
+		frappe.db.after_commit.add(delete_source_object)
 
 	file_url = s3.get_file_url(key, doc.file_name, doc.is_private)
 	doc.db_set("file_url", file_url, update_modified=False)
