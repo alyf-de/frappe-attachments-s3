@@ -297,17 +297,35 @@ class TestMinioIntegration(FrappeTestCase):
 		with self.assertRaises(ClientError):
 			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
 
-	def test_minio_make_private_in_main_bucket_keeps_object(self):
+	def test_minio_toggle_private_in_main_bucket_sets_acl(self):
 		file_doc = self._create_file_doc(file_name="minio-toggle-acl.txt", content="acl", is_private=0)
 		controller.file_upload_to_s3(file_doc, "after_insert")
 		file_doc.reload()
 		key = file_doc.s3_object_key
+		acl_calls = []
+		make_api_call = BaseClient._make_api_call
 
-		file_doc.is_private = 1
-		file_doc.save()
+		def record_acl(client, operation_name, api_params):
+			if operation_name == "PutObjectAcl":
+				# MinIO does not support object ACLs, so only record the call.
+				acl_calls.append(api_params)
+				return {}
+			return make_api_call(client, operation_name, api_params)
 
-		file_doc.reload()
-		self.assertIn("controller.generate_file?key=", file_doc.file_url)
+		with patch.object(BaseClient, "_make_api_call", record_acl):
+			file_doc.is_private = 1
+			file_doc.save()
+			self.assertIn("controller.generate_file?key=", file_doc.file_url)
+			file_doc.is_private = 0
+			file_doc.save()
+
+		self.assertEqual(
+			acl_calls,
+			[
+				{"Bucket": self.bucket_name, "Key": key, "ACL": "private"},
+				{"Bucket": self.bucket_name, "Key": key, "ACL": "public-read"},
+			],
+		)
 		self._assert_object_exists(key)
 
 	def test_minio_failed_make_public_removes_public_copy(self):
