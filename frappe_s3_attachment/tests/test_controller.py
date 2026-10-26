@@ -335,6 +335,14 @@ class TestControllerCharacterization(FrappeTestCase):
 		enqueue_fn.assert_called_once()
 		self.assertEqual(result, {"job_id": namespaced_job_id, "queued": False})
 
+	def test_enqueue_move_file_rejects_second_job_for_same_file(self):
+		with patch("frappe_s3_attachment.controller.enqueue", return_value=None) as enqueue_fn:
+			with self.assertRaises(frappe.ValidationError):
+				controller.enqueue_move_file("F-1", to_s3=True)
+		enqueue_fn.assert_called_once()
+		self.assertEqual(enqueue_fn.call_args.kwargs["job_id"], "frappe_s3_attachment.move_file::F-1")
+		self.assertTrue(enqueue_fn.call_args.kwargs["deduplicate"])
+
 	def test_upload_public_sets_acl_public_read(self):
 		with patch(
 			"frappe_s3_attachment.controller.filetype.guess",
