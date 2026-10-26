@@ -15,6 +15,7 @@ from boto3.s3.transfer import TransferConfig
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from frappe import _
+from frappe.core.doctype.access_log.access_log import make_access_log
 from frappe.core.doctype.file.utils import generate_file_name
 from frappe.utils import cint, get_files_path, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
@@ -338,16 +339,21 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 
 	file_name_in_db = frappe.db.get_value("File", {"s3_object_key": key}, "name")
 	if not file_name_in_db:
-		raise frappe.DoesNotExistError(doctype="File")
+		# Same error as a denied read, like core Frappe, so callers cannot probe which keys exist.
+		raise frappe.PermissionError
 
 	file_doc = frappe.get_doc("File", file_name_in_db)
-	file_doc.check_permission("read")
+	# No check_permission: its messages name the File, so callers could see that the key exists.
+	if not frappe.has_permission("File", "read", file_doc):
+		raise frappe.PermissionError
 
 	s3_upload = S3Operations()
 	# Use the stored name, not the request's, so callers cannot turn an SVG into an inline "PDF".
 	signed_url = s3_upload.get_url(key, file_doc.file_name)
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = signed_url
+	file_type = os.path.splitext(file_doc.file_name)[1][1:]
+	make_access_log(doctype="File", document=file_doc.name, file_type=file_type)
 	return
 
 
