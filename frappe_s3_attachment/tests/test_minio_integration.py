@@ -172,10 +172,29 @@ class TestMinioIntegration(FrappeTestCase):
 		self._assert_object_exists(key)
 
 		controller.delete_from_cloud(file_doc, "on_trash")
+		# The object stays until the deletion is committed.
+		self._assert_object_exists(key)
+		frappe.db.after_commit.run()
 
 		with self.assertRaises(ClientError):
 			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
 		self.uploaded_keys.discard(key)
+
+	def test_minio_delete_from_cloud_keeps_object_used_by_other_file(self):
+		file_doc = self._create_file_doc(file_name="minio-delete-shared.txt", content="shared", is_private=1)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		self.settings = self._build_settings(delete_file_from_cloud=1)
+		key = file_doc.s3_object_key
+		other_doc = self._create_file_doc(
+			file_name="minio-delete-shared-2.txt", content="other", is_private=1
+		)
+		other_doc.db_set("s3_object_key", key)
+
+		controller.delete_from_cloud(file_doc, "on_trash")
+		frappe.db.after_commit.run()
+
+		self._assert_object_exists(key)
 
 	def test_minio_move_to_local_and_back_to_s3(self):
 		file_doc = self._create_file_doc(file_name="minio-move.txt", content="move", is_private=1)

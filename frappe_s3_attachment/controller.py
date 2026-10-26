@@ -227,7 +227,8 @@ class S3Operations:
 			try:
 				self.S3_CLIENT.delete_object(Bucket=bucket, Key=key)
 			except ClientError:
-				frappe.throw(_("Access denied: Could not delete file"))
+				# This runs after commit, so the File is already deleted. The object left behind only uses storage.
+				frappe.log_error(title=_("Could not delete S3 object {0}").format(key), defer_insert=True)
 
 	def read_file_from_s3(self, key):
 		"""
@@ -438,12 +439,20 @@ def migrate_existing_files():
 
 
 def delete_from_cloud(doc, method):
-	"""Delete file from s3"""
+	"""Delete the S3 object after commit, unless another **File** still uses it."""
 	if not doc.get("s3_object_key"):
 		return
+	key = doc.s3_object_key
 	s3 = S3Operations()
-	bucket = s3.get_bucket_of_file(doc.file_url, doc.s3_object_key)
-	s3.delete_from_s3(doc.s3_object_key, bucket)
+	bucket = s3.get_bucket_of_file(doc.file_url, key)
+	# A custom s3_key_generator can give several files the same key, in one or both buckets.
+	other_file_urls = frappe.get_all(
+		"File", filters={"s3_object_key": key, "name": ["!=", doc.name]}, pluck="file_url"
+	)
+	if bucket in {s3.get_bucket_of_file(url, key) for url in other_file_urls}:
+		return
+	# Delete after commit, so a rollback cannot leave a File without its object.
+	frappe.db.after_commit.add(lambda: s3.delete_from_s3(key, bucket))
 
 
 @frappe.whitelist(methods=["POST"])
