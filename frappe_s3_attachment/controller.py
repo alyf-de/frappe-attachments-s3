@@ -334,7 +334,7 @@ class S3File(File):
 def file_upload_to_s3(doc, _method, callback=None):
 	"""Upload a **File** row to S3 after insert.
 
-	``doc_events`` handler: uploads the on-disk file, removes the local copy unless another **File** uses it, updates
+	``doc_events`` handler: uploads the on-disk file, removes the local copy after commit unless another **File** uses it, updates
 	``file_url`` and ``s3_object_key``, clears ``content_hash``, and may update the
 	parent document's ``image_field`` when the parent **DocType** defines one in Meta.
 	Skips upload when *Attached To DocType* is listed as ignored on **S3 File Attachment**.
@@ -363,6 +363,32 @@ def file_upload_to_s3(doc, _method, callback=None):
 			file_path, doc.file_name, doc.is_private, parent_doctype, parent_name, callback
 		)
 
+		bucket = s3_upload.get_bucket(doc.is_private)
+
+		def remove_unused_local_file():
+			# Frappe deduplicates uploads by content_hash, so another File can still use this disk file.
+			# A File that used it and was deleted in the same transaction can have removed it already.
+			if not frappe.db.exists("File", {"file_url": path}) and os.path.exists(file_path):
+				os.remove(file_path)
+
+		def undo_upload():
+			# A custom s3_key_generator can give several files the same key.
+			other_file_urls = frappe.get_all("File", filters={"s3_object_key": key}, pluck="file_url")
+			if bucket not in {s3_upload.get_bucket_of_file(url, key) for url in other_file_urls}:
+				try:
+					s3_upload.S3_CLIENT.delete_object(Bucket=bucket, Key=key)
+				except Exception:
+					# An error here stops the other rollback callbacks. The object left behind only uses storage.
+					frappe.log_error(title=_("Could not delete S3 object {0}").format(key), defer_insert=True)
+			# Core File.on_rollback cannot remove the local file: the doc has the S3 file_url now.
+			# Do this last, so that an error here cannot keep the object.
+			remove_unused_local_file()
+
+		# Do not commit here: the caller owns the transaction. Remove the local file only after commit.
+		# Register before the next steps, so that a failure in them also deletes the uploaded object.
+		frappe.db.after_commit.add(remove_unused_local_file)
+		frappe.db.after_rollback.add(undo_upload)
+
 		file_url = s3_upload.get_file_url(key, doc.file_name, doc.is_private)
 
 		# Change file info without triggering any hooks
@@ -384,11 +410,6 @@ def file_upload_to_s3(doc, _method, callback=None):
 		)
 		if image_field and is_parent_image:
 			frappe.db.set_value(parent_doctype, parent_name, image_field, file_url)
-
-		frappe.db.commit()
-		# Frappe deduplicates uploads by content_hash, so another File can still use this disk file.
-		if not frappe.db.exists("File", {"file_url": path}):
-			os.remove(file_path)
 
 
 @frappe.whitelist()
@@ -450,12 +471,14 @@ def run_migrate_existing_files():
 
 		try:
 			file_upload_to_s3(doc, "migrate_existing_files")
+			# Keep the progress of each file.
+			frappe.db.commit()
 		except JobTimeoutException:
 			# The job's time limit must stop the whole migration, not only this file.
 			raise
 		except Exception:
 			# Skip the file so one rejected upload does not stop the whole migration.
-			# A failure before the database commit leaves the local file for a later retry.
+			# The rollback deletes the uploaded object and keeps the local file for a later retry.
 			# A cleanup failure after the commit leaves the row migrated, so it is not retried.
 			frappe.db.rollback()
 			frappe.log_error(

@@ -1,9 +1,11 @@
+import os
 import re
 import urllib.parse
 from functools import partial
 from unittest.mock import MagicMock, call, patch
 
 import frappe
+from botocore.exceptions import ClientError
 from frappe.tests.utils import FrappeTestCase
 from rq.timeouts import JobTimeoutException
 
@@ -67,6 +69,9 @@ class TestControllerCharacterization(FrappeTestCase):
 		self.addCleanup(self.patch_get_doc.stop)
 		self.addCleanup(self.patch_boto3_client.stop)
 		self.addCleanup(self.patch_hooks.stop)
+		# Upload tests use docs that are not in the database, so drop their commit and rollback cleanup.
+		self.addCleanup(frappe.db.after_commit.reset)
+		self.addCleanup(frappe.db.after_rollback.reset)
 
 	def test_strip_special_chars_keeps_alphanumeric_dot_dash_underscore(self):
 		s3 = controller.S3Operations()
@@ -244,10 +249,10 @@ class TestControllerCharacterization(FrappeTestCase):
 								controller.run_migrate_existing_files()
 
 		self.assertEqual(upload_fn.call_count, 3)
-		# Each log is committed before the next failure rolls back.
+		# Each log is committed before the next failure rolls back. Each upload is committed.
 		self.assertEqual(
 			[call[0] for call in db.method_calls],
-			["rollback", "log_error", "commit", "rollback", "log_error", "commit"],
+			["rollback", "log_error", "commit", "rollback", "log_error", "commit", "commit"],
 		)
 		self.assertEqual(
 			[call.kwargs["reference_name"] for call in db.log_error.call_args_list],
@@ -489,8 +494,6 @@ class TestControllerCharacterization(FrappeTestCase):
 		mock_s3_ops.get_file_url.return_value = "https://s3.local/test-bucket/shop/path/logo.png"
 		with (
 			patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops),
-			patch("frappe_s3_attachment.controller.os.remove"),
-			patch("frappe_s3_attachment.controller.frappe.db.commit"),
 			patch("frappe_s3_attachment.controller.frappe.db.set_value") as set_value,
 			patch(
 				"frappe_s3_attachment.controller.frappe.get_meta",
@@ -533,8 +536,6 @@ class TestControllerCharacterization(FrappeTestCase):
 		mock_s3_ops.get_file_url = partial(controller.S3Operations.get_file_url, mock_s3_ops)
 		with (
 			patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops),
-			patch("frappe_s3_attachment.controller.os.remove"),
-			patch("frappe_s3_attachment.controller.frappe.db.commit"),
 			patch("frappe_s3_attachment.controller.frappe.db.set_value"),
 		):
 			controller.file_upload_to_s3(doc, "after_insert")
@@ -564,8 +565,6 @@ class TestControllerCharacterization(FrappeTestCase):
 		mock_s3_ops.get_bucket.return_value = "test-bucket"
 		with (
 			patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops),
-			patch("frappe_s3_attachment.controller.os.remove"),
-			patch("frappe_s3_attachment.controller.frappe.db.commit"),
 			patch("frappe_s3_attachment.controller.frappe.db.set_value") as set_value,
 			patch("frappe_s3_attachment.controller.frappe.db.get_value", return_value="/files/current.png"),
 			patch(
@@ -1221,3 +1220,167 @@ class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
 		self.assertEqual(frappe.db.get_value("File", first.name, "content_hash"), second.content_hash)
 		self.assertTrue(second.file_url.startswith("/private/files/"))
 		self.assertTrue(second.exists_on_disk())
+
+
+class TestUploadTransaction(FrappeTestCase):
+	def test_upload_does_not_commit_callers_transaction(self):
+		key = "2026/ToDo/ABCDEFGH_note.txt"
+		s3 = MagicMock()
+		s3.is_ignored_doctype.return_value = False
+		s3.upload_files_to_s3_with_key.return_value = key
+		s3.S3_CLIENT.meta.endpoint_url = "https://s3.local"
+		s3.get_bucket.return_value = "test-bucket"
+		s3.get_file_url = partial(controller.S3Operations.get_file_url, s3)
+
+		with patch("frappe_s3_attachment.controller.S3Operations", return_value=s3):
+			todo = frappe.get_doc({"doctype": "ToDo", "description": "parent"}).insert()
+			file = frappe.get_doc(
+				{
+					"doctype": "File",
+					"file_name": "note.txt",
+					"content": frappe.generate_hash(),
+					"is_private": 1,
+					"attached_to_doctype": "ToDo",
+					"attached_to_name": todo.name,
+				}
+			).insert()
+			# Without hooks, so no S3 call. Removes the rows if the upload committed them.
+			self.addCleanup(frappe.db.commit)
+			self.addCleanup(frappe.db.delete, "File", {"name": file.name})
+			self.addCleanup(frappe.db.delete, "ToDo", {"name": todo.name})
+			local_path = s3.upload_files_to_s3_with_key.call_args.args[0]
+			# The local file stays until the transaction commits.
+			self.assertTrue(os.path.exists(local_path))
+			frappe.db.rollback()
+
+		self.assertFalse(frappe.db.exists("ToDo", todo.name))
+		self.assertFalse(frappe.db.exists("File", file.name))
+		self.assertFalse(os.path.exists(local_path))
+		s3.S3_CLIENT.delete_object.assert_called_once_with(Bucket="test-bucket", Key=key)
+
+	def test_rollback_logs_failed_s3_delete(self):
+		s3 = MagicMock()
+		s3.is_ignored_doctype.return_value = False
+		s3.upload_files_to_s3_with_key.return_value = "2026/File/ABCDEFGH_denied.txt"
+		s3.get_file_url = partial(controller.S3Operations.get_file_url, s3)
+		s3.S3_CLIENT.delete_object.side_effect = ClientError(
+			{"Error": {"Code": "AccessDenied"}}, "DeleteObject"
+		)
+
+		with (
+			patch("frappe_s3_attachment.controller.S3Operations", return_value=s3),
+			patch("frappe_s3_attachment.controller.frappe.log_error") as log_error,
+		):
+			frappe.get_doc(
+				{
+					"doctype": "File",
+					"file_name": "denied.txt",
+					"content": frappe.generate_hash(),
+					"is_private": 1,
+				}
+			).insert()
+			local_path = s3.upload_files_to_s3_with_key.call_args.args[0]
+			# The error must not stop the rollback.
+			frappe.db.rollback()
+
+		log_error.assert_called_once()
+		self.assertFalse(os.path.exists(local_path))
+
+	def test_rollback_deletes_object_when_local_file_removal_fails(self):
+		key = "2026/File/ABCDEFGH_locked.txt"
+		s3 = MagicMock()
+		s3.is_ignored_doctype.return_value = False
+		s3.upload_files_to_s3_with_key.return_value = key
+		s3.get_bucket.return_value = "test-bucket"
+		s3.get_file_url = partial(controller.S3Operations.get_file_url, s3)
+
+		with patch("frappe_s3_attachment.controller.S3Operations", return_value=s3):
+			frappe.get_doc(
+				{
+					"doctype": "File",
+					"file_name": "locked.txt",
+					"content": frappe.generate_hash(),
+					"is_private": 1,
+				}
+			).insert()
+			local_path = s3.upload_files_to_s3_with_key.call_args.args[0]
+			self.addCleanup(os.remove, local_path)
+			with (
+				patch("frappe_s3_attachment.controller.os.remove", side_effect=PermissionError),
+				self.assertRaises(PermissionError),
+			):
+				frappe.db.rollback()
+
+		s3.S3_CLIENT.delete_object.assert_called_once_with(Bucket="test-bucket", Key=key)
+
+	def test_rollback_after_failed_upload_step_deletes_object(self):
+		key = "2026/File/ABCDEFGH_orphan.txt"
+		s3 = MagicMock()
+		s3.upload_files_to_s3_with_key.return_value = key
+		s3.get_bucket.return_value = "test-bucket"
+		s3.get_file_url = partial(controller.S3Operations.get_file_url, s3)
+
+		with patch("frappe_s3_attachment.controller.S3Operations", return_value=s3):
+			# Keep the File local on insert, like a File from before the app was installed.
+			s3.is_ignored_doctype.return_value = True
+			file = frappe.get_doc(
+				{
+					"doctype": "File",
+					"file_name": "orphan.txt",
+					"content": frappe.generate_hash(),
+					"is_private": 1,
+				}
+			).insert()
+			frappe.db.commit()
+			local_path = file.get_full_path()
+			self.addCleanup(os.remove, local_path)
+			self.addCleanup(frappe.db.commit)
+			self.addCleanup(frappe.db.delete, "File", {"name": file.name})
+			s3.is_ignored_doctype.return_value = False
+			# For example a File attached to a DocType of an uninstalled app.
+			with (
+				patch(
+					"frappe_s3_attachment.controller.frappe.get_meta", side_effect=frappe.DoesNotExistError
+				),
+				self.assertRaises(frappe.DoesNotExistError),
+			):
+				controller.file_upload_to_s3(file, "migrate_existing_files")
+			frappe.db.rollback()
+
+		s3.S3_CLIENT.delete_object.assert_called_once_with(Bucket="test-bucket", Key=key)
+		# The committed row still points to the local file.
+		self.assertTrue(os.path.exists(local_path))
+
+	def test_rollback_keeps_object_used_by_other_file(self):
+		key = "2026/File/ABCDEFGH_shared.txt"
+		s3 = MagicMock()
+		s3.is_ignored_doctype.return_value = False
+		s3.upload_files_to_s3_with_key.return_value = key
+		s3.get_bucket.return_value = "test-bucket"
+		s3.get_bucket_of_file.return_value = "test-bucket"
+		s3.get_file_url = partial(controller.S3Operations.get_file_url, s3)
+
+		with patch("frappe_s3_attachment.controller.S3Operations", return_value=s3):
+			# Like a custom s3_key_generator that gives both files the same key.
+			committed = frappe.get_doc(
+				{
+					"doctype": "File",
+					"file_name": "shared.txt",
+					"content": frappe.generate_hash(),
+					"is_private": 1,
+				}
+			).insert()
+			frappe.db.commit()
+			self.addCleanup(frappe.db.commit)
+			self.addCleanup(frappe.db.delete, "File", {"name": committed.name})
+			frappe.get_doc(
+				{
+					"doctype": "File",
+					"file_name": "shared.txt",
+					"content": frappe.generate_hash(),
+					"is_private": 1,
+				}
+			).insert()
+			frappe.db.rollback()
+
+		s3.S3_CLIENT.delete_object.assert_not_called()

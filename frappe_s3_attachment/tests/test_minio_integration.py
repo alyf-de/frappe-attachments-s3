@@ -59,7 +59,7 @@ class TestMinioIntegration(FrappeTestCase):
 		self.addCleanup(self.patch_get_doc.stop)
 
 	def tearDown(self):
-		# controller.file_upload_to_s3 commits mid-test, escaping FrappeTestCase's
+		# Tests commit to run the after_commit cleanup, escaping FrappeTestCase's
 		# rollback. Clean up the File rows we created so subsequent runs don't
 		# collide on content_hash duplicate detection in core File.save_file.
 		for name in self.created_file_names:
@@ -140,6 +140,7 @@ class TestMinioIntegration(FrappeTestCase):
 		self.assertTrue(os.path.exists(local_path))
 
 		controller.file_upload_to_s3(file_doc, "after_insert")
+		frappe.db.commit()
 		file_doc.reload()
 		self.assertFalse(file_doc.content_hash)
 		uploaded_url = file_doc.file_url
@@ -157,6 +158,7 @@ class TestMinioIntegration(FrappeTestCase):
 		self.assertTrue(os.path.exists(local_path))
 
 		controller.file_upload_to_s3(file_doc, "after_insert")
+		frappe.db.commit()
 		file_doc.reload()
 		self.assertFalse(file_doc.content_hash)
 		uploaded_url = file_doc.file_url
@@ -183,6 +185,20 @@ class TestMinioIntegration(FrappeTestCase):
 
 				self.assertEqual(file_doc.get_content(), "from s3")
 
+	def test_minio_rollback_after_upload_deletes_object(self):
+		file_doc = self._create_file_doc(file_name="minio-rollback.txt", content="undo upload", is_private=1)
+		local_path = frappe.utils.get_site_path(file_doc.file_url.lstrip("/"))
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		key = file_doc.s3_object_key
+		self._assert_object_exists(key)
+
+		frappe.db.rollback()
+
+		self.assertFalse(frappe.db.exists("File", file_doc.name))
+		self.assertFalse(os.path.exists(local_path))
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
+
 	def test_minio_delete_from_cloud_removes_object(self):
 		file_doc = self._create_file_doc(file_name="minio-delete.txt", content="delete", is_private=1)
 		controller.file_upload_to_s3(file_doc, "after_insert")
@@ -205,6 +221,7 @@ class TestMinioIntegration(FrappeTestCase):
 			file_name="minio-delete-rollback.txt", content="rollback", is_private=1
 		)
 		controller.file_upload_to_s3(file_doc, "after_insert")
+		frappe.db.commit()
 		file_doc.reload()
 		self.settings = self._build_settings(delete_file_from_cloud=1)
 		key = file_doc.s3_object_key
@@ -313,6 +330,7 @@ class TestMinioIntegration(FrappeTestCase):
 		self.assertEqual(file_doc.file_url, local_doc.file_url)
 
 		controller.file_upload_to_s3(file_doc, "after_insert")
+		frappe.db.commit()
 		file_doc.reload()
 
 		self._assert_object_exists(file_doc.s3_object_key)
@@ -384,6 +402,7 @@ class TestMinioIntegration(FrappeTestCase):
 		public_bucket = self._use_public_bucket()
 		file_doc = self._create_file_doc(file_name="minio-toggle-fail.txt", content="fail", is_private=1)
 		controller.file_upload_to_s3(file_doc, "after_insert")
+		frappe.db.commit()
 		file_doc.reload()
 		key = file_doc.s3_object_key
 
