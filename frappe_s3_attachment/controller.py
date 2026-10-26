@@ -494,6 +494,14 @@ def update_privacy_in_cloud(doc, method):
 	old_file_url = doc.file_url
 	source_bucket = s3.get_bucket_of_file(old_file_url, key)
 	target_bucket = s3.get_bucket(doc.is_private)
+
+	def buckets_of_other_files():
+		# A custom s3_key_generator can give several files the same key, in one or both buckets.
+		other_file_urls = frappe.get_all(
+			"File", filters={"s3_object_key": key, "name": ["!=", doc.name]}, pluck="file_url"
+		)
+		return {s3.get_bucket_of_file(url, key) for url in other_file_urls}
+
 	if source_bucket == target_bucket:
 		new_acl, old_acl = ("private", "public-read") if doc.is_private else ("public-read", "private")
 		s3.S3_CLIENT.put_object_acl(Bucket=target_bucket, Key=key, ACL=new_acl)
@@ -501,14 +509,14 @@ def update_privacy_in_cloud(doc, method):
 			partial(s3.S3_CLIENT.put_object_acl, Bucket=target_bucket, Key=key, ACL=old_acl)
 		)
 	else:
+		target_is_used = target_bucket in buckets_of_other_files()
 		# The copy keeps content type and metadata, and gets the default (private) object ACL.
 		s3.S3_CLIENT.copy({"Bucket": source_bucket, "Key": key}, target_bucket, key)
-		frappe.db.after_rollback.add(partial(s3.S3_CLIENT.delete_object, Bucket=target_bucket, Key=key))
+		if not target_is_used:
+			frappe.db.after_rollback.add(partial(s3.S3_CLIENT.delete_object, Bucket=target_bucket, Key=key))
 
 		def delete_source_object():
-			# Keep an object that another File still uses, like move_file_to_local.
-			other_file_urls = frappe.get_all("File", filters={"s3_object_key": key}, pluck="file_url")
-			if source_bucket not in {s3.get_bucket_of_file(url, key) for url in other_file_urls}:
+			if source_bucket not in buckets_of_other_files():
 				s3.S3_CLIENT.delete_object(Bucket=source_bucket, Key=key)
 
 		# Delete only after the commit, so a failed save cannot lose the file.
