@@ -477,8 +477,7 @@ class TestControllerCharacterization(FrappeTestCase):
 		mock_s3_ops = MagicMock()
 		mock_s3_ops.is_ignored_doctype.return_value = False
 		mock_s3_ops.upload_files_to_s3_with_key.return_value = "shop/path/logo.png"
-		mock_s3_ops.S3_CLIENT.meta.endpoint_url = "https://s3.local"
-		mock_s3_ops.get_bucket.return_value = "test-bucket"
+		mock_s3_ops.get_file_url.return_value = "https://s3.local/test-bucket/shop/path/logo.png"
 		with (
 			patch("frappe_s3_attachment.controller.S3Operations", return_value=mock_s3_ops),
 			patch("frappe_s3_attachment.controller.os.remove"),
