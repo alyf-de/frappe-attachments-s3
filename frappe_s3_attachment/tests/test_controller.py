@@ -823,10 +823,11 @@ class TestGenerateFilePermissions(FrappeTestCase):
 		params = self.mock_s3_client.generate_presigned_url.call_args.kwargs["Params"]
 		self.assertEqual(params["ResponseContentDisposition"], "attachment; filename*=UTF-8''logo.svg")
 
-	def test_generate_file_missing_key_raises_does_not_exist(self):
+	def test_generate_file_missing_key_raises_permission_error(self):
+		"""An unknown key must look the same as a denied key, so callers cannot probe which keys exist."""
 		frappe.set_user("Administrator")
 		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
-			with self.assertRaises(frappe.DoesNotExistError):
+			with self.assertRaises(frappe.PermissionError):
 				controller.generate_file(key="no-such-file-row-key-zzz")
 
 	def test_generate_file_denies_when_other_file_with_key_is_not_readable(self):

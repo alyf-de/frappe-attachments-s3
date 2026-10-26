@@ -341,13 +341,16 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 
 	file_names = frappe.get_all("File", filters={"s3_object_key": key}, pluck="name")
 	if not file_names:
-		raise frappe.DoesNotExistError(doctype="File")
+		# Same error as a denied read, like core Frappe, so callers cannot probe which keys exist.
+		raise frappe.PermissionError
 
 	# Several rows can share a key. The user must be allowed to read all of them,
 	# so that a row with a forged key cannot give access to the object of another row.
 	file_docs = [frappe.get_doc("File", name) for name in file_names]
 	for file_doc in file_docs:
-		file_doc.check_permission("read")
+		# No check_permission: its messages name the File, so callers could see that the key exists.
+		if not frappe.has_permission("File", "read", file_doc):
+			raise frappe.PermissionError
 
 	s3_upload = S3Operations()
 	# Use the stored name, not the request's, so callers cannot turn an SVG into an inline "PDF".
