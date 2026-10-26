@@ -89,6 +89,7 @@ class TestMinioIntegration(FrappeTestCase):
 				"endpoint_url": self.endpoint_url,
 				"region_name": self.region_name,
 				"bucket_name": self.bucket_name,
+				"public_bucket_name": "",
 				"folder_name": "",
 				"ignored_doctypes": [],
 				"signed_url_expiry_time": 300,
@@ -262,3 +263,47 @@ class TestMinioIntegration(FrappeTestCase):
 		self._assert_object_exists(file_doc.s3_object_key)
 		self.assertTrue(local_doc.exists_on_disk())
 		self.assertEqual(local_doc.get_content(), "dedup")
+
+	def test_minio_make_private_moves_object_out_of_public_bucket(self):
+		public_bucket = f"{self.bucket_name}-public"
+		if public_bucket not in {b["Name"] for b in self.minio_client.list_buckets()["Buckets"]}:
+			self.minio_client.create_bucket(Bucket=public_bucket)
+		self.settings.public_bucket_name = public_bucket
+		file_doc = self._create_file_doc(file_name="minio-toggle.txt", content="toggle", is_private=0)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		key = file_doc.s3_object_key
+		self.addCleanup(self.minio_client.delete_object, Bucket=public_bucket, Key=key)
+		self.uploaded_keys.add(key)
+		self.minio_client.head_object(Bucket=public_bucket, Key=key)
+
+		file_doc.is_private = 1
+		file_doc.save()
+
+		file_doc.reload()
+		self.assertIn("controller.generate_file?key=", file_doc.file_url)
+		self._assert_object_exists(key)
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=public_bucket, Key=key)
+
+		file_doc.is_private = 0
+		file_doc.save()
+
+		file_doc.reload()
+		self.assertEqual(file_doc.file_url, f"{self.endpoint_url}/{public_bucket}/{key}")
+		self.minio_client.head_object(Bucket=public_bucket, Key=key)
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
+
+	def test_minio_make_private_in_main_bucket_keeps_object(self):
+		file_doc = self._create_file_doc(file_name="minio-toggle-acl.txt", content="acl", is_private=0)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		key = file_doc.s3_object_key
+
+		file_doc.is_private = 1
+		file_doc.save()
+
+		file_doc.reload()
+		self.assertIn("controller.generate_file?key=", file_doc.file_url)
+		self._assert_object_exists(key)

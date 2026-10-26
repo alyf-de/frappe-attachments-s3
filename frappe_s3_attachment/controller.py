@@ -93,6 +93,13 @@ class S3Operations:
 			return file_url.removeprefix(prefix).removesuffix(suffix)
 		return self.BUCKET
 
+	def get_file_url(self, key, file_name, is_private):
+		"""Return the ``file_url`` of an uploaded file in the bucket of ``get_bucket``."""
+		if is_private:
+			generate_method = "frappe_s3_attachment.controller.generate_file"
+			return f"""/api/method/{generate_method}?key={key}&file_name={file_name}"""
+		return f"{self.S3_CLIENT.meta.endpoint_url}/{self.get_bucket(is_private)}/{key}"
+
 	def is_ignored_doctype(self, parent_doctype: str) -> bool:
 		"""Return whether *Attached To DocType* ``parent_doctype`` is listed on **S3 File Attachment**."""
 		ignored = {
@@ -294,11 +301,7 @@ def file_upload_to_s3(doc, _method, callback=None):
 			file_path, doc.file_name, doc.is_private, parent_doctype, parent_name, callback
 		)
 
-		if doc.is_private:
-			generate_method = "frappe_s3_attachment.controller.generate_file"
-			file_url = f"""/api/method/{generate_method}?key={key}&file_name={doc.file_name}"""
-		else:
-			file_url = f"{s3_upload.S3_CLIENT.meta.endpoint_url}/{s3_upload.get_bucket(doc.is_private)}/{key}"
+		file_url = s3_upload.get_file_url(key, doc.file_name, doc.is_private)
 
 		# Change file info without triggering any hooks
 		frappe.db.set_value(
@@ -444,6 +447,39 @@ def delete_from_cloud(doc, method):
 	s3 = S3Operations()
 	bucket = s3.get_bucket_of_file(doc.file_url, doc.s3_object_key)
 	s3.delete_from_s3(doc.s3_object_key, bucket)
+
+
+def update_privacy_in_cloud(doc, method):
+	"""Make the S3 object of a **File** private or public when *Is Private* changes (``on_update``).
+
+	Frappe moves only local files, so without this a public object stays readable at its old URL.
+	"""
+	if doc.flags.in_insert or not doc.s3_object_key or not doc.has_value_changed("is_private"):
+		return
+
+	key = doc.s3_object_key
+	s3 = S3Operations()
+	old_file_url = doc.file_url
+	source_bucket = s3.get_bucket_of_file(old_file_url, key)
+	target_bucket = s3.get_bucket(doc.is_private)
+	if source_bucket == target_bucket:
+		acl = "private" if doc.is_private else "public-read"
+		s3.S3_CLIENT.put_object_acl(Bucket=target_bucket, Key=key, ACL=acl)
+	else:
+		# The copy keeps content type and metadata, and gets the default (private) object ACL.
+		s3.S3_CLIENT.copy({"Bucket": source_bucket, "Key": key}, target_bucket, key)
+		s3.S3_CLIENT.delete_object(Bucket=source_bucket, Key=key)
+
+	file_url = s3.get_file_url(key, doc.file_name, doc.is_private)
+	doc.db_set("file_url", file_url, update_modified=False)
+
+	if doc.attached_to_doctype and doc.attached_to_name:
+		image_field = frappe.get_meta(doc.attached_to_doctype).get("image_field")
+		parent_image = image_field and frappe.db.get_value(
+			doc.attached_to_doctype, doc.attached_to_name, image_field
+		)
+		if parent_image == old_file_url:
+			frappe.db.set_value(doc.attached_to_doctype, doc.attached_to_name, image_field, file_url)
 
 
 @frappe.whitelist(methods=["POST"])
