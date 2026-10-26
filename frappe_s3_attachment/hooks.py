@@ -93,6 +93,7 @@ doc_events = {
 		"validate": "frappe_s3_attachment.controller.protect_s3_fields",
 		"after_insert": "frappe_s3_attachment.controller.file_upload_to_s3",
 		"on_trash": "frappe_s3_attachment.controller.delete_from_cloud",
+		"on_update": "frappe_s3_attachment.controller.update_privacy_in_cloud",
 	}
 }
 

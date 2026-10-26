@@ -14,6 +14,7 @@ The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filena
 5. Files are stored under `{folder}/{year}/{month}/{day}/{doctype}/{random}_{filename}` (see _Folder Name_).
 6. Optional _Public Bucket Name_: public files go to this separate, publicly readable bucket without an object ACL, while the main bucket stays private. Use it for providers without object ACLs (e.g. Backblaze B2), where a single bucket is either fully public or fully private. If empty, public files go to _Bucket Name_ with a `public-read` ACL.
 7. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** is listed there by default (patch **v0.2.1** backfills the row on migrate if missing; you may remove it to allow **Data Import** files on S3).
+8. When _Is Private_ changes on a **File** in S3, the object follows: with a _Public Bucket Name_, it moves to the other bucket; without one, its ACL changes between `private` and `public-read`. The _File URL_ changes accordingly.
 
 #### Installation
 
@@ -63,6 +64,8 @@ git diff b595155..HEAD -- path/to/file.py
 These match upstream unless noted; further hardening is tracked as follow-up work, not regressions introduced only in this fork:
 
 - **Duplicate uploads**: S3-managed **File** rows intentionally keep `content_hash` empty after upload so Frappe does not deduplicate against them (aligned with remote-file behaviour and [issue #12](https://github.com/alyf-de/frappe-attachments-s3/issues/12)). Handling duplication for remote resources would require adaptions to the core File DocType and is currently considered out of scope for this app. 
+- **Privacy of shared objects** (this fork): if several **File** rows use the same S3 object (only possible with a custom `s3_key_generator`), changing _Is Private_ on one of them is rejected.
+- **Privacy change is not atomic** (this fork): S3 is changed during the save; a rollback reverts the S3 change. If removing the old public copy fails after the commit, the old public URL stays readable and an error is shown; make the file public and private again to retry. A rollback after a change to public can expose the contents briefly, to readers who already know the object key.
 
 Optional automation backlog: v16 compatibility audit (test base classes, explicit **boto3** pin).
 
