@@ -556,6 +556,7 @@ class TestControllerCharacterization(FrappeTestCase):
 			}
 		)
 		controller.delete_from_cloud(doc, "on_trash")
+		frappe.db.after_commit.run()
 		self.mock_s3_client.delete_object.assert_called_once_with(
 			Bucket="test-bucket", Key="shop/path/logo.png"
 		)
@@ -573,6 +574,7 @@ class TestControllerCharacterization(FrappeTestCase):
 				self.mock_s3_client.reset_mock()
 				doc = frappe._dict({"s3_object_key": "2026/logo.png", "file_url": file_url})
 				controller.delete_from_cloud(doc, "on_trash")
+				frappe.db.after_commit.run()
 				self.mock_s3_client.delete_object.assert_called_once_with(Bucket=bucket, Key="2026/logo.png")
 
 	def test_delete_from_cloud_keeps_bucket_after_public_bucket_setting_changes(self):
@@ -584,6 +586,7 @@ class TestControllerCharacterization(FrappeTestCase):
 				self.mock_s3_client.reset_mock()
 				doc = frappe._dict({"s3_object_key": "2026/logo.png", "file_url": file_url})
 				controller.delete_from_cloud(doc, "on_trash")
+				frappe.db.after_commit.run()
 				self.mock_s3_client.delete_object.assert_called_once_with(
 					Bucket="old-public-bucket", Key="2026/logo.png"
 				)
@@ -594,6 +597,7 @@ class TestControllerCharacterization(FrappeTestCase):
 			{"s3_object_key": "2026/logo.png", "file_url": "https://other.example/other-bucket/2026/logo.png"}
 		)
 		controller.delete_from_cloud(doc, "on_trash")
+		frappe.db.after_commit.run()
 		self.mock_s3_client.delete_object.assert_called_once_with(Bucket="test-bucket", Key="2026/logo.png")
 
 	def test_delete_from_cloud_skips_when_no_s3_object_key(self):
