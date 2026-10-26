@@ -648,8 +648,8 @@ class TestControllerCharacterization(FrappeTestCase):
 				return settings
 			return MagicMock(check_permission=MagicMock(), file_name="x.pdf")
 
-		with patch("frappe_s3_attachment.controller.frappe.db.get_value") as db_get_value:
-			db_get_value.return_value = "FILE-LOOKUP-1"
+		with patch("frappe_s3_attachment.controller.frappe.get_all") as get_all:
+			get_all.return_value = ["FILE-LOOKUP-1"]
 			with (
 				patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=selective_get_doc),
 				patch("frappe_s3_attachment.controller.make_access_log"),
@@ -658,7 +658,7 @@ class TestControllerCharacterization(FrappeTestCase):
 				self.mock_s3_client.generate_presigned_url.return_value = "https://signed.example/x"
 				controller.generate_file(key="some/s3/key", file_name="x.pdf")
 
-		filters = db_get_value.call_args.args[1]
+		filters = get_all.call_args.kwargs["filters"]
 		self.assertEqual(filters, {"s3_object_key": "some/s3/key"})
 
 	def test_s3_file_regex_match_accepts_public_and_private_urls(self):
@@ -972,6 +972,83 @@ class TestGenerateFilePermissions(FrappeTestCase):
 		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
 			with self.assertRaises(frappe.PermissionError):
 				controller.generate_file(key="no-such-file-row-key-zzz")
+
+	def test_generate_file_denies_when_other_file_with_key_is_not_readable(self):
+		"""A row with a forged key must not give access to the object of another row."""
+		self._ensure_perm_test_user()
+		frappe.set_user("Administrator")
+		secret = frappe.get_doc(
+			{"doctype": "File", "file_name": "victim.txt", "content": "victim-content", "is_private": 1}
+		).insert()
+		frappe.db.set_value("File", secret.name, "s3_object_key", "forged-key-perm-test")
+		forged = frappe.get_doc(
+			{"doctype": "File", "file_name": "forged.txt", "content": "forged-content", "is_private": 1}
+		).insert()
+		# Rows saved before the validate check can have a forged key.
+		frappe.db.set_value(
+			"File", forged.name, {"s3_object_key": "forged-key-perm-test", "owner": _PERM_TEST_USER}
+		)
+
+		frappe.set_user(_PERM_TEST_USER)
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
+			with self.assertRaises(frappe.PermissionError):
+				controller.generate_file(key="forged-key-perm-test")
+
+
+class TestProtectS3Fields(FrappeTestCase):
+	"""Users cannot point a File at another S3 object. Inserts without a local file do not upload."""
+
+	def setUp(self):
+		super().setUp()
+		frappe.set_user("Administrator")
+
+	def test_insert_drops_s3_object_key(self):
+		file_doc = frappe.get_doc(
+			{"doctype": "File", "file_url": "https://example.com/remote.png", "s3_object_key": "other/key"}
+		).insert()
+
+		self.assertFalse(frappe.db.get_value("File", file_doc.name, "s3_object_key"))
+
+	def test_insert_copy_of_s3_file(self):
+		file_url = "/api/method/frappe_s3_attachment.controller.generate_file?key=copy/a.txt&file_name=a.txt"
+		file_doc = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": "a.txt",
+				"file_url": file_url,
+				"is_private": 1,
+				"s3_object_key": "copy/a.txt",
+			}
+		).insert()
+
+		self.assertEqual(frappe.db.get_value("File", file_doc.name, "file_url"), file_url)
+		self.assertFalse(frappe.db.get_value("File", file_doc.name, "s3_object_key"))
+
+	def test_insert_folder(self):
+		folder = frappe.get_doc(
+			{"doctype": "File", "file_name": "S3 Test Folder", "is_folder": 1, "folder": "Home"}
+		).insert()
+
+		self.assertTrue(frappe.db.exists("File", folder.name))
+
+	def test_save_rejects_changed_s3_object_key(self):
+		file_doc = frappe.get_doc({"doctype": "File", "file_url": "https://example.com/key.png"}).insert()
+		file_doc.s3_object_key = "other/key"
+
+		with self.assertRaises(frappe.PermissionError):
+			file_doc.save()
+
+	def test_save_rejects_changed_file_url_of_s3_file(self):
+		file_doc = frappe.get_doc(
+			{"doctype": "File", "file_url": "https://s3.example/bucket/key.png"}
+		).insert()
+		frappe.db.set_value("File", file_doc.name, "s3_object_key", "key.png")
+		file_doc.reload()
+		file_doc.save()  # unchanged S3 fields are fine
+
+		file_doc.file_url = "https://s3.example/other-bucket/key.png"
+		with self.assertRaises(frappe.PermissionError):
+			file_doc.save()
 
 
 class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
