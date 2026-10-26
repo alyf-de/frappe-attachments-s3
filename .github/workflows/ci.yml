@@ -94,6 +94,8 @@ jobs:
         run: |
           sudo apt update
           sudo apt-get install mariadb-client
+          # The new client requires SSL, but the mariadb:10.6 service does not offer it.
+          printf '[client]\nskip-ssl\n' > ~/.my.cnf
 
       - name: Setup
         run: |
@@ -162,6 +164,8 @@ jobs:
         run: |
           sudo apt update
           sudo apt-get install mariadb-client
+          # The new client requires SSL, but the mariadb:10.6 service does not offer it.
+          printf '[client]\nskip-ssl\n' > ~/.my.cnf
 
       # MinIO no longer publishes free images; Chainguard maintains a build of the open-source server.
       - name: Start MinIO
