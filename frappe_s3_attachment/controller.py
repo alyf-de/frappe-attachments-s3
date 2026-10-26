@@ -394,7 +394,7 @@ def run_migrate_existing_files():
 			frappe.db.commit()
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def migrate_existing_files():
 	"""Queue migration of local **File** records to S3 on the long worker queue."""
 	frappe.only_for("System Manager")
