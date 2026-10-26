@@ -1331,6 +1331,11 @@ class TestUploadTransaction(FrappeTestCase):
 					"is_private": 1,
 				}
 			).insert()
+			frappe.db.commit()
+			local_path = file.get_full_path()
+			self.addCleanup(os.remove, local_path)
+			self.addCleanup(frappe.db.commit)
+			self.addCleanup(frappe.db.delete, "File", {"name": file.name})
 			s3.is_ignored_doctype.return_value = False
 			# For example a File attached to a DocType of an uninstalled app.
 			with (
@@ -1343,3 +1348,39 @@ class TestUploadTransaction(FrappeTestCase):
 			frappe.db.rollback()
 
 		s3.S3_CLIENT.delete_object.assert_called_once_with(Bucket="test-bucket", Key=key)
+		# The committed row still points to the local file.
+		self.assertTrue(os.path.exists(local_path))
+
+	def test_rollback_keeps_object_used_by_other_file(self):
+		key = "2026/File/ABCDEFGH_shared.txt"
+		s3 = MagicMock()
+		s3.is_ignored_doctype.return_value = False
+		s3.upload_files_to_s3_with_key.return_value = key
+		s3.get_bucket.return_value = "test-bucket"
+		s3.get_bucket_of_file.return_value = "test-bucket"
+		s3.get_file_url = partial(controller.S3Operations.get_file_url, s3)
+
+		with patch("frappe_s3_attachment.controller.S3Operations", return_value=s3):
+			# Like a custom s3_key_generator that gives both files the same key.
+			committed = frappe.get_doc(
+				{
+					"doctype": "File",
+					"file_name": "shared.txt",
+					"content": frappe.generate_hash(),
+					"is_private": 1,
+				}
+			).insert()
+			frappe.db.commit()
+			self.addCleanup(frappe.db.commit)
+			self.addCleanup(frappe.db.delete, "File", {"name": committed.name})
+			frappe.get_doc(
+				{
+					"doctype": "File",
+					"file_name": "shared.txt",
+					"content": frappe.generate_hash(),
+					"is_private": 1,
+				}
+			).insert()
+			frappe.db.rollback()
+
+		s3.S3_CLIENT.delete_object.assert_not_called()
