@@ -4,7 +4,7 @@ name: Claude
 #
 # Setup:
 # - Repo variables: CLAUDE_BOT_USER (login of the bot user), CLAUDE_BOT_ID (its numeric user ID)
-# - Repo secrets: CLAUDE_BOT_TOKEN (PAT of the bot user, with repo access), ANTHROPIC_API_KEY
+# - Repo secrets: CLAUDE_BOT_TOKEN (PAT of the bot user, with repo access), CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`)
 #
 # The bot pushes with its own PAT, because pushes made with GITHUB_TOKEN don't trigger CI.
 
@@ -132,7 +132,7 @@ jobs:
           FRAPPE_S3_ATTACHMENT_MINIO_BUCKET: "frappe-s3-attachment-test"
           FRAPPE_S3_ATTACHMENT_MINIO_REGION: "us-east-1"
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.CLAUDE_BOT_TOKEN }}
           bot_name: ${{ vars.CLAUDE_BOT_USER }}
           bot_id: ${{ vars.CLAUDE_BOT_ID }}
