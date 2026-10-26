@@ -372,17 +372,17 @@ def file_upload_to_s3(doc, _method, callback=None):
 				os.remove(file_path)
 
 		def undo_upload():
-			# Core File.on_rollback cannot remove the local file: the doc has the S3 file_url now.
-			remove_unused_local_file()
 			# A custom s3_key_generator can give several files the same key.
 			other_file_urls = frappe.get_all("File", filters={"s3_object_key": key}, pluck="file_url")
-			if bucket in {s3_upload.get_bucket_of_file(url, key) for url in other_file_urls}:
-				return
-			try:
-				s3_upload.S3_CLIENT.delete_object(Bucket=bucket, Key=key)
-			except Exception:
-				# An error here stops the other rollback callbacks. The object left behind only uses storage.
-				frappe.log_error(title=_("Could not delete S3 object {0}").format(key), defer_insert=True)
+			if bucket not in {s3_upload.get_bucket_of_file(url, key) for url in other_file_urls}:
+				try:
+					s3_upload.S3_CLIENT.delete_object(Bucket=bucket, Key=key)
+				except Exception:
+					# An error here stops the other rollback callbacks. The object left behind only uses storage.
+					frappe.log_error(title=_("Could not delete S3 object {0}").format(key), defer_insert=True)
+			# Core File.on_rollback cannot remove the local file: the doc has the S3 file_url now.
+			# Do this last, so that an error here cannot keep the object.
+			remove_unused_local_file()
 
 		# Do not commit here: the caller owns the transaction. Remove the local file only after commit.
 		# Register before the next steps, so that a failure in them also deletes the uploaded object.

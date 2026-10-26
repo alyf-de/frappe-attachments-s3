@@ -1286,6 +1286,33 @@ class TestUploadTransaction(FrappeTestCase):
 		log_error.assert_called_once()
 		self.assertFalse(os.path.exists(local_path))
 
+	def test_rollback_deletes_object_when_local_file_removal_fails(self):
+		key = "2026/File/ABCDEFGH_locked.txt"
+		s3 = MagicMock()
+		s3.is_ignored_doctype.return_value = False
+		s3.upload_files_to_s3_with_key.return_value = key
+		s3.get_bucket.return_value = "test-bucket"
+		s3.get_file_url = partial(controller.S3Operations.get_file_url, s3)
+
+		with patch("frappe_s3_attachment.controller.S3Operations", return_value=s3):
+			frappe.get_doc(
+				{
+					"doctype": "File",
+					"file_name": "locked.txt",
+					"content": frappe.generate_hash(),
+					"is_private": 1,
+				}
+			).insert()
+			local_path = s3.upload_files_to_s3_with_key.call_args.args[0]
+			self.addCleanup(os.remove, local_path)
+			with (
+				patch("frappe_s3_attachment.controller.os.remove", side_effect=PermissionError),
+				self.assertRaises(PermissionError),
+			):
+				frappe.db.rollback()
+
+		s3.S3_CLIENT.delete_object.assert_called_once_with(Bucket="test-bucket", Key=key)
+
 	def test_rollback_after_failed_upload_step_deletes_object(self):
 		key = "2026/File/ABCDEFGH_orphan.txt"
 		s3 = MagicMock()
