@@ -12,16 +12,16 @@ on:
   issues:
     types: [assigned]
 
-concurrency:
-  group: claude-issue-${{ github.event.issue.number }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
 jobs:
   resolve:
     if: github.event.assignee.login == vars.CLAUDE_BOT_USER
+    # Job-level, so that assigning someone else doesn't cancel a running bot.
+    concurrency:
+      group: claude-issue-${{ github.event.issue.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 60
     name: Resolve issue
