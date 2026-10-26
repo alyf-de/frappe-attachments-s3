@@ -112,6 +112,14 @@ When `RUN_MINIO_INTEGRATION_TESTS` is unset (or not `"1"`), these tests are skip
 3. Use _Migrate Existing Files_ to queue upload of local files still under `sites/<site>/public` and `private` into the bucket. Migration runs on the **long** RQ worker (`bench worker --queue long`); track progress via the linked **RQ Job**. Set _Timeout for Migration Job_ (seconds) on large sites; re-run if the job times out before all files are uploaded.
 4. Enable _Delete file from cloud_ if removed **File** rows should delete the corresponding S3 object.
 
+If _Access Key_ and _Secret Key_ are empty, the app shows an error. To use the boto3 default credentials instead (environment variables, `~/.aws`, instance profile), set `s3_use_default_credentials` in the site config:
+
+```bash
+bench --site <site> set-config -p s3_use_default_credentials 1
+```
+
+The default credentials belong to the host, so all sites on the bench share them. Enable this only for sites that may use them.
+
 #### Custom S3 object keys (`s3_key_generator`)
 
 To replace the default `{folder}/{year}/{month}/{day}/{doctype}/{random}_{filename}` layout, register Frappe’s **`s3_key_generator`** hook in your custom app’s `hooks.py` (only the **first** dotted path in the merged hook list is used):
