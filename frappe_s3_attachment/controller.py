@@ -280,6 +280,10 @@ def file_upload_to_s3(doc, _method, callback=None):
 			``"move_to_s3"`` updates the parent's image only if it pointed to this file.
 		callback: Optional boto3 progress callback, called with the bytes sent in each chunk.
 	"""
+	if doc.is_folder or doc.is_remote_file:
+		# No local file to upload, e.g. a remote URL or a copy of a file that is already in S3.
+		return
+
 	s3_upload = S3Operations()
 	path = doc.file_url
 	site_path = frappe.utils.get_site_path()
@@ -335,16 +339,19 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 		frappe.local.response["body"] = "Key not found."
 		return
 
-	file_name_in_db = frappe.db.get_value("File", {"s3_object_key": key}, "name")
-	if not file_name_in_db:
+	file_names = frappe.get_all("File", filters={"s3_object_key": key}, pluck="name")
+	if not file_names:
 		raise frappe.DoesNotExistError(doctype="File")
 
-	file_doc = frappe.get_doc("File", file_name_in_db)
-	file_doc.check_permission("read")
+	# Several rows can share a key. The user must be allowed to read all of them,
+	# so that a row with a forged key cannot give access to the object of another row.
+	file_docs = [frappe.get_doc("File", name) for name in file_names]
+	for file_doc in file_docs:
+		file_doc.check_permission("read")
 
 	s3_upload = S3Operations()
 	# Use the stored name, not the request's, so callers cannot turn an SVG into an inline "PDF".
-	signed_url = s3_upload.get_url(key, file_doc.file_name)
+	signed_url = s3_upload.get_url(key, file_docs[0].file_name)
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = signed_url
 	return
@@ -435,6 +442,24 @@ def migrate_existing_files():
 		queued = False
 
 	return {"job_id": job_id, "queued": queued}
+
+
+def protect_s3_fields(doc, method):
+	"""Do not let users point a **File** at another S3 object (``validate`` doc event).
+
+	Only this app sets ``s3_object_key`` and the S3 ``file_url``. It uses ``frappe.db.set_value``,
+	which does not run this check.
+	"""
+	if doc.is_new():
+		# The upload in after_insert sets the key. A copy of an S3 file keeps only its file_url.
+		doc.s3_object_key = None
+		return
+
+	previous = doc.get_doc_before_save()
+	key_changed = (doc.s3_object_key or None) != (previous.s3_object_key or None)
+	url_changed = previous.s3_object_key and doc.file_url != previous.file_url
+	if key_changed or url_changed:
+		frappe.throw(_("You cannot change the S3 object of a file."), frappe.PermissionError)
 
 
 def delete_from_cloud(doc, method):
