@@ -647,7 +647,7 @@ class TestEndpointUrl(FrappeTestCase):
 	def test_endpoint_url_threaded_when_set(self):
 		self.settings.endpoint_url = "https://fsn1.your-objectstorage.com"
 
-		controller.S3Operations()
+		controller.S3Operations().S3_CLIENT
 
 		_, kwargs = controller.boto3.client.call_args
 		self.assertEqual(kwargs.get("endpoint_url"), "https://fsn1.your-objectstorage.com")
@@ -656,7 +656,7 @@ class TestEndpointUrl(FrappeTestCase):
 	def test_endpoint_url_omitted_when_blank(self):
 		self.settings.endpoint_url = ""
 
-		controller.S3Operations()
+		controller.S3Operations().S3_CLIENT
 
 		_, kwargs = controller.boto3.client.call_args
 		self.assertNotIn("endpoint_url", kwargs)
@@ -670,12 +670,12 @@ class TestCredentials(FrappeTestCase):
 		self.patch_boto3_client.start()
 		self.addCleanup(self.patch_boto3_client.stop)
 
-	def _make_s3_operations(self, settings):
+	def _make_client(self, settings):
 		with patch("frappe_s3_attachment.controller.frappe.get_doc", return_value=settings):
-			return controller.S3Operations()
+			return controller.S3Operations().S3_CLIENT
 
 	def test_keys_from_settings(self):
-		self._make_s3_operations(_make_settings())
+		self._make_client(_make_settings())
 
 		_, kwargs = controller.boto3.client.call_args
 		self.assertEqual(kwargs["aws_access_key_id"], "test-access-key")
@@ -686,18 +686,43 @@ class TestCredentials(FrappeTestCase):
 
 		with patch.dict(frappe.local.conf, {"s3_use_default_credentials": 0}):
 			with self.assertRaises(frappe.ValidationError):
-				self._make_s3_operations(settings)
+				self._make_client(settings)
 		controller.boto3.client.assert_not_called()
 
 	def test_missing_keys_use_default_credentials_if_site_config_opts_in(self):
 		settings = _make_settings(access_key="", _secret_password="")
 
 		with patch.dict(frappe.local.conf, {"s3_use_default_credentials": 1}):
-			self._make_s3_operations(settings)
+			self._make_client(settings)
 
 		_, kwargs = controller.boto3.client.call_args
 		self.assertNotIn("aws_access_key_id", kwargs)
 		self.assertNotIn("aws_secret_access_key", kwargs)
+
+	def test_missing_keys_keep_ignored_attachments_local(self):
+		settings = _make_settings(
+			access_key="",
+			_secret_password="",
+			ignored_doctypes=[frappe._dict({"doctype_name": "Data Import"})],
+		)
+		doc = frappe._dict(
+			{
+				"file_url": "/private/files/import.csv",
+				"attached_to_doctype": "Data Import",
+				"attached_to_name": "DI-1",
+				"file_name": "import.csv",
+				"is_private": 1,
+			}
+		)
+
+		with (
+			patch.dict(frappe.local.conf, {"s3_use_default_credentials": 0}),
+			patch("frappe_s3_attachment.controller.frappe.get_doc", return_value=settings),
+		):
+			controller.file_upload_to_s3(doc, "after_insert")
+
+		self.assertEqual(doc.file_url, "/private/files/import.csv")
+		controller.boto3.client.assert_not_called()
 
 
 class TestNonAsciiFilenames(FrappeTestCase):

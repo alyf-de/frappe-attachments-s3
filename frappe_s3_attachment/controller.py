@@ -7,6 +7,7 @@ import re
 import string
 import unicodedata
 import urllib.parse
+from functools import cached_property
 
 import boto3
 import filetype
@@ -46,12 +47,19 @@ MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
 class S3Operations:
 	def __init__(self):
 		"""
-		Function to initialise the S3 client from the S3 File Attachment singleton.
+		Function to load the S3 File Attachment singleton.
 		"""
 		self.s3_settings_doc = frappe.get_doc(
 			"S3 File Attachment",
 			"S3 File Attachment",
 		)
+		self.BUCKET = self.s3_settings_doc.bucket_name
+		self.PUBLIC_BUCKET = self.s3_settings_doc.public_bucket_name
+		self.folder_name = self.s3_settings_doc.folder_name
+
+	# Created on first use, so files that stay local do not need credentials.
+	@cached_property
+	def S3_CLIENT(self):
 		config_kwargs = {"signature_version": "s3v4"}
 		client_kwargs = dict(
 			region_name=self.s3_settings_doc.region_name,
@@ -78,10 +86,7 @@ class S3Operations:
 			)
 
 		client_kwargs["config"] = Config(**config_kwargs)
-		self.S3_CLIENT = boto3.client("s3", **client_kwargs)
-		self.BUCKET = self.s3_settings_doc.bucket_name
-		self.PUBLIC_BUCKET = self.s3_settings_doc.public_bucket_name
-		self.folder_name = self.s3_settings_doc.folder_name
+		return boto3.client("s3", **client_kwargs)
 
 	def get_bucket(self, is_private):
 		"""Return the bucket for new uploads: *Public Bucket Name* for public files, if set."""
