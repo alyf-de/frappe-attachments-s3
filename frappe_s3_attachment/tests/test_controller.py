@@ -17,9 +17,9 @@ def _filetype_kind(mime):
 
 
 def _make_settings(**overrides):
-	secret_password = overrides.pop("_secret_password", "")
+	secret_password = overrides.pop("_secret_password", "test-secret-key")
 	merged = {
-		"access_key": "",
+		"access_key": "test-access-key",
 		"endpoint_url": "",
 		"region_name": "fsn1",
 		"bucket_name": "test-bucket",
@@ -661,6 +661,42 @@ class TestEndpointUrl(FrappeTestCase):
 		_, kwargs = controller.boto3.client.call_args
 		self.assertNotIn("endpoint_url", kwargs)
 		self.assertEqual(kwargs["config"].s3, None)
+
+
+class TestCredentials(FrappeTestCase):
+	def setUp(self):
+		super().setUp()
+		self.patch_boto3_client = patch("frappe_s3_attachment.controller.boto3.client")
+		self.patch_boto3_client.start()
+		self.addCleanup(self.patch_boto3_client.stop)
+
+	def _make_s3_operations(self, settings):
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", return_value=settings):
+			return controller.S3Operations()
+
+	def test_keys_from_settings(self):
+		self._make_s3_operations(_make_settings())
+
+		_, kwargs = controller.boto3.client.call_args
+		self.assertEqual(kwargs["aws_access_key_id"], "test-access-key")
+		self.assertEqual(kwargs["aws_secret_access_key"], "test-secret-key")
+
+	def test_missing_keys_do_not_use_default_credentials(self):
+		settings = _make_settings(access_key="", _secret_password="")
+
+		with self.assertRaises(frappe.ValidationError):
+			self._make_s3_operations(settings)
+		controller.boto3.client.assert_not_called()
+
+	def test_missing_keys_use_default_credentials_if_site_config_opts_in(self):
+		settings = _make_settings(access_key="", _secret_password="")
+
+		with patch.dict(frappe.local.conf, {"s3_use_default_credentials": 1}):
+			self._make_s3_operations(settings)
+
+		_, kwargs = controller.boto3.client.call_args
+		self.assertNotIn("aws_access_key_id", kwargs)
+		self.assertNotIn("aws_secret_access_key", kwargs)
 
 
 class TestNonAsciiFilenames(FrappeTestCase):

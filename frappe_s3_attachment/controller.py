@@ -62,12 +62,20 @@ class S3Operations:
 			client_kwargs["endpoint_url"] = endpoint_url
 			config_kwargs["s3"] = {"addressing_style": "path"}
 
-		# use credentials from the S3 File Attachment singleton, if available
-		# otherwise fall back to boto3 default credential resolution
+		# The boto3 default credential chain can resolve to the host's identity, which all sites
+		# on the bench share. Use it only if the site config opts in.
 		secret = self.s3_settings_doc.get_password("secret_key", raise_exception=False)
 		if self.s3_settings_doc.access_key and secret:
 			client_kwargs["aws_access_key_id"] = self.s3_settings_doc.access_key
 			client_kwargs["aws_secret_access_key"] = secret
+		elif not frappe.conf.get("s3_use_default_credentials"):
+			frappe.throw(
+				_("Set {0} and {1} in {2}.").format(
+					frappe.bold(_("Access Key")),
+					frappe.bold(_("Secret Key")),
+					frappe.bold(_("S3 File Attachment")),
+				)
+			)
 
 		client_kwargs["config"] = Config(**config_kwargs)
 		self.S3_CLIENT = boto3.client("s3", **client_kwargs)
