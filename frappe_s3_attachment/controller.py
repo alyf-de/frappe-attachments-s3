@@ -360,8 +360,8 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 		# Same error as a denied read, like core Frappe, so callers cannot probe which keys exist.
 		raise frappe.PermissionError
 
-	# Several rows can share a key. The user must be allowed to read all of them,
-	# so that a row with a forged key cannot give access to the object of another row.
+	# Rows only share a key through a custom s3_key_generator or a key forged before validation existed.
+	# Require read access on all of them: this can deny access to a shared object, but never grants it.
 	file_docs = [frappe.get_doc("File", name) for name in file_names]
 	for file_doc in file_docs:
 		# No check_permission: its messages name the File, so callers could see that the key exists.

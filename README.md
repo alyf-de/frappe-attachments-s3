@@ -138,6 +138,7 @@ def build_object_key(file_name, parent_doctype, parent_name):
 ```
 
 - **Contract:** Your callable is invoked with keyword arguments ``file_name``, ``parent_doctype``, and ``parent_name`` (same names the controller passes). Define matching parameter names (or ``**kwargs``). Return a **valid S3 key** (UTF-8 string; no leading slash). The implementation does **not** run the default path’s `strip_special_chars` on hook output—you own delimiter safety and character choices.
+- **Uniqueness:** Return a unique key for each **File**. If several **File** rows share a key, a download needs read permission on all of them, and a new upload with the same key overwrites the object of the other rows.
 - **Fallback:** Uncaught exceptions are logged at **error** level with a traceback, then the built-in layout is used. A falsy return, or a value that is empty after stripping slashes, logs a **warning** and falls back to the built-in layout.
 
 #### License
