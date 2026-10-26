@@ -17,6 +17,7 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 from frappe import _
 from frappe.core.doctype.access_log.access_log import make_access_log
+from frappe.core.doctype.file.file import File
 from frappe.core.doctype.file.utils import generate_file_name
 from frappe.utils import cint, get_files_path, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
@@ -289,6 +290,30 @@ class S3Operations:
 		return url
 
 
+class S3File(File):
+	def get_content(self) -> bytes | str:
+		"""Read the content of S3 files from S3. Core opens ``file_url`` as a local path, which fails for S3 URLs."""
+		key = self.s3_object_key
+		if not key and self.is_remote_file:
+			# A copy (e.g. a Communication attachment) has no key. Take it from the row this app uploaded,
+			# never from file_url, which users can set.
+			key = frappe.db.get_value(
+				"File", {"file_url": self.file_url, "s3_object_key": ("is", "set")}, "s3_object_key"
+			)
+		if not key:
+			return super().get_content()
+
+		s3 = S3Operations()
+		bucket = s3.get_bucket_of_file(self.file_url, key)
+		self._content = s3.S3_CLIENT.get_object(Bucket=bucket, Key=key)["Body"].read()
+		try:
+			# Like core: str for text files, bytes for binary files
+			self._content = self._content.decode()
+		except UnicodeDecodeError:
+			pass
+		return self._content
+
+
 def file_upload_to_s3(doc, _method, callback=None):
 	"""Upload a **File** row to S3 after insert.
 
@@ -477,6 +502,7 @@ def protect_s3_fields(doc, method):
 	if doc.is_new():
 		# The upload in after_insert sets the key. A copy of an S3 file keeps only its file_url.
 		doc.s3_object_key = None
+		_restore_url_of_private_s3_copy(doc)
 		return
 
 	previous = doc.get_doc_before_save()
@@ -484,6 +510,28 @@ def protect_s3_fields(doc, method):
 	url_changed = previous.s3_object_key and doc.file_url != previous.file_url
 	if key_changed or url_changed:
 		frappe.throw(_("You cannot change the S3 object of a file."), frappe.PermissionError)
+
+
+def _restore_url_of_private_s3_copy(doc):
+	"""Give a new copy of a private S3 file the encoded URL of its original, if the user can read the original.
+
+	Core unquotes ``file_url`` on insert, so the copy no longer matches the original: core's access check
+	finds no private file to check, and ``S3File.get_content`` finds no key. Core also makes the copy public,
+	because its URL does not start with ``/private``.
+	"""
+	if not (doc.file_url or "").startswith("/api/method/frappe_s3_attachment.controller.generate_file?"):
+		return
+
+	keys = urllib.parse.parse_qs(urllib.parse.urlsplit(doc.file_url).query).get("key")
+	if not keys:
+		return
+
+	original_urls = frappe.get_all("File", filters={"s3_object_key": keys[0]}, pluck="file_url")
+	original_url = next((url for url in original_urls if urllib.parse.unquote(url) == doc.file_url), None)
+	if original_url:
+		doc.file_url = original_url
+		doc.is_private = 1
+		doc.validate_private_file_access()
 
 
 def delete_from_cloud(doc, method):
