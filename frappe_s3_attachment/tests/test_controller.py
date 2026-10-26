@@ -837,7 +837,7 @@ class TestGenerateFilePermissions(FrappeTestCase):
 		f = frappe.get_doc(
 			{
 				"doctype": "File",
-				"file_name": "report.pdf",
+				"file_name": "report.txt",
 				"content": "z",
 				"is_private": 1,
 			}
@@ -855,7 +855,7 @@ class TestGenerateFilePermissions(FrappeTestCase):
 					"user": "Administrator",
 					"export_from": "File",
 					"reference_document": f.name,
-					"file_type": "pdf",
+					"file_type": "txt",
 				},
 			)
 		)
