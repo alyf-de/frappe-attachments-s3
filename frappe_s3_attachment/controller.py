@@ -422,6 +422,9 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 	# files, read access on any of them is enough.
 	for name in file_names:
 		file_doc = frappe.get_doc("File", name)
+		# MariaDB matches keys case-insensitively, but S3 keys are case-sensitive.
+		if file_doc.s3_object_key != key:
+			continue
 		# No check_permission: its messages name the File, so callers could see that the key exists.
 		if frappe.has_permission("File", "read", file_doc):
 			break

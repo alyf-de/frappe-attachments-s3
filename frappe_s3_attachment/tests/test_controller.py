@@ -1035,6 +1035,21 @@ class TestGenerateFilePermissions(FrappeTestCase):
 		self.assertEqual(params["ResponseContentDisposition"], "inline; filename*=UTF-8''copy.txt")
 		make_access_log.assert_called_once_with(doctype="File", document=copy.name, file_type="txt")
 
+	def test_generate_file_ignores_file_whose_key_differs_in_case(self):
+		"""MariaDB compares case-insensitively, but S3 keys are case-sensitive."""
+		self._ensure_perm_test_user()
+		frappe.set_user("Administrator")
+		_insert_private_s3_file("case-key-perm-test/SECRET.txt", "SECRET.txt")
+		_insert_private_s3_file("case-key-perm-test/secret.txt", "secret.txt")
+		# Not by key or name: those filters match both rows.
+		readable_name = frappe.get_last_doc("File").name
+		frappe.db.set_value("File", readable_name, "owner", _PERM_TEST_USER)
+
+		frappe.set_user(_PERM_TEST_USER)
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
+			with self.assertRaises(frappe.PermissionError):
+				controller.generate_file(key="case-key-perm-test/SECRET.txt")
+
 	def test_generate_file_ignores_public_file_with_same_key(self):
 		"""generate_file serves the main bucket. A public File can have the same key in the public bucket."""
 		self._ensure_perm_test_user()
