@@ -648,7 +648,9 @@ class TestControllerCharacterization(FrappeTestCase):
 			return MagicMock(check_permission=MagicMock(), file_name="x.pdf")
 
 		with patch("frappe_s3_attachment.controller.frappe.get_all") as get_all:
-			get_all.return_value = ["FILE-LOOKUP-1"]
+			get_all.return_value = [
+				frappe._dict(name="FILE-LOOKUP-1", file_name="x.pdf", s3_object_key="some/s3/key")
+			]
 			with (
 				patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=selective_get_doc),
 				patch("frappe_s3_attachment.controller.make_access_log"),
@@ -658,7 +660,7 @@ class TestControllerCharacterization(FrappeTestCase):
 				controller.generate_file(key="some/s3/key", file_name="x.pdf")
 
 		filters = get_all.call_args.kwargs["filters"]
-		self.assertEqual(filters, {"s3_object_key": "some/s3/key"})
+		self.assertEqual(filters, {"s3_object_key": "some/s3/key", "is_private": 1})
 
 	def test_s3_file_regex_match_accepts_public_and_private_urls(self):
 		self.assertTrue(controller._s3_file_regex_match("https://fsn1.your-objectstorage.com/bucket/key"))
@@ -1012,26 +1014,99 @@ class TestGenerateFilePermissions(FrappeTestCase):
 			with self.assertRaises(frappe.PermissionError):
 				controller.generate_file(key="no-such-file-row-key-zzz")
 
-	def test_generate_file_denies_when_other_file_with_key_is_not_readable(self):
-		"""A row with a forged key must not give access to the object of another row."""
+	def test_generate_file_allows_user_who_can_read_a_copy(self):
+		"""Read access on any private File with the key is enough, like core for private files."""
+		self._ensure_perm_test_user()
+		frappe.set_user("Administrator")
+		file_url = _insert_private_s3_file("copy-key-perm-test", "original.txt")
+		copy = frappe.get_doc(
+			{"doctype": "File", "file_name": "copy.txt", "file_url": file_url, "is_private": 1}
+		).insert()
+		frappe.db.set_value("File", copy.name, "owner", _PERM_TEST_USER)
+
+		frappe.set_user(_PERM_TEST_USER)
+		frappe.local.response = frappe._dict()
+		with (
+			patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc),
+			patch("frappe_s3_attachment.controller.make_access_log") as make_access_log,
+		):
+			controller.generate_file(key="copy-key-perm-test")
+
+		self.assertEqual(frappe.local.response["type"], "redirect")
+		make_access_log.assert_called_once_with(doctype="File", document=copy.name, file_type="txt")
+
+	def test_generate_file_disposition_ignores_file_name_of_copy(self):
+		"""A user can name a copy of an SVG "preview.txt". The SVG must still not render inline."""
+		self._ensure_perm_test_user()
+		frappe.set_user("Administrator")
+		file_url = _insert_private_s3_file("svg-copy-key-perm-test", "active.svg")
+		copy = frappe.get_doc(
+			{"doctype": "File", "file_name": "preview.txt", "file_url": file_url, "is_private": 1}
+		).insert()
+		frappe.db.set_value("File", copy.name, "owner", _PERM_TEST_USER)
+
+		frappe.set_user(_PERM_TEST_USER)
+		frappe.local.response = frappe._dict()
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
+			controller.generate_file(key="svg-copy-key-perm-test")
+
+		params = self.mock_s3_client.generate_presigned_url.call_args.kwargs["Params"]
+		self.assertEqual(params["ResponseContentDisposition"], "attachment; filename*=UTF-8''active.svg")
+
+	def test_generate_file_ignores_file_whose_key_differs_in_case(self):
+		"""MariaDB compares case-insensitively, but S3 keys are case-sensitive."""
+		self._ensure_perm_test_user()
+		frappe.set_user("Administrator")
+		_insert_private_s3_file("case-key-perm-test/SECRET.txt", "SECRET.txt")
+		_insert_private_s3_file("case-key-perm-test/secret.txt", "secret.txt")
+		# Not by key or name: those filters match both rows.
+		readable_name = frappe.get_last_doc("File").name
+		frappe.db.set_value("File", readable_name, "owner", _PERM_TEST_USER)
+
+		frappe.set_user(_PERM_TEST_USER)
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
+			with self.assertRaises(frappe.PermissionError):
+				controller.generate_file(key="case-key-perm-test/SECRET.txt")
+
+	def test_generate_file_ignores_public_file_with_same_key(self):
+		"""generate_file serves the main bucket. A public File can have the same key in the public bucket."""
 		self._ensure_perm_test_user()
 		frappe.set_user("Administrator")
 		secret = frappe.get_doc(
 			{"doctype": "File", "file_name": "victim.txt", "content": "victim-content", "is_private": 1}
 		).insert()
-		frappe.db.set_value("File", secret.name, "s3_object_key", "forged-key-perm-test")
-		forged = frappe.get_doc(
-			{"doctype": "File", "file_name": "forged.txt", "content": "forged-content", "is_private": 1}
+		frappe.db.set_value("File", secret.name, "s3_object_key", "public-key-perm-test")
+		public = frappe.get_doc(
+			{"doctype": "File", "file_name": "public.txt", "content": "public-content", "is_private": 0}
 		).insert()
-		# Rows saved before the validate check can have a forged key.
 		frappe.db.set_value(
-			"File", forged.name, {"s3_object_key": "forged-key-perm-test", "owner": _PERM_TEST_USER}
+			"File", public.name, {"s3_object_key": "public-key-perm-test", "owner": _PERM_TEST_USER}
 		)
 
 		frappe.set_user(_PERM_TEST_USER)
 		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
 			with self.assertRaises(frappe.PermissionError):
-				controller.generate_file(key="forged-key-perm-test")
+				controller.generate_file(key="public-key-perm-test")
+
+
+def _insert_private_s3_file(key, file_name):
+	"""Insert a File the way the upload leaves it: with an encoded URL and the key, set without hooks."""
+	file_url = "/api/method/frappe_s3_attachment.controller.generate_file?" + urllib.parse.urlencode(
+		{"key": key, "file_name": file_name}
+	)
+	original = frappe.get_doc(
+		{"doctype": "File", "file_name": file_name, "file_url": file_url, "is_private": 1}
+	).insert()
+	frappe.db.set_value("File", original.name, {"file_url": file_url, "s3_object_key": key, "is_private": 1})
+	return file_url
+
+
+def _ensure_perm_test_user():
+	if not frappe.db.exists("User", _PERM_TEST_USER):
+		user = frappe.get_doc(
+			{"doctype": "User", "email": _PERM_TEST_USER, "first_name": "S3 Perm", "send_welcome_email": 0}
+		).insert()
+		user.add_roles("Desk User")
 
 
 class TestProtectS3Fields(FrappeTestCase):
@@ -1048,7 +1123,7 @@ class TestProtectS3Fields(FrappeTestCase):
 
 		self.assertFalse(frappe.db.get_value("File", file_doc.name, "s3_object_key"))
 
-	def test_insert_copy_of_s3_file(self):
+	def test_insert_with_unknown_s3_url_drops_s3_object_key(self):
 		file_url = "/api/method/frappe_s3_attachment.controller.generate_file?key=copy/a.txt&file_name=a.txt"
 		file_doc = frappe.get_doc(
 			{
@@ -1063,22 +1138,9 @@ class TestProtectS3Fields(FrappeTestCase):
 		self.assertEqual(frappe.db.get_value("File", file_doc.name, "file_url"), file_url)
 		self.assertFalse(frappe.db.get_value("File", file_doc.name, "s3_object_key"))
 
-	def _insert_private_s3_original(self, key, file_name):
-		"""Insert a File the way the upload leaves it: with an encoded URL and the key, set without hooks."""
-		file_url = "/api/method/frappe_s3_attachment.controller.generate_file?" + urllib.parse.urlencode(
-			{"key": key, "file_name": file_name}
-		)
-		original = frappe.get_doc(
-			{"doctype": "File", "file_name": file_name, "file_url": file_url, "is_private": 1}
-		).insert()
-		frappe.db.set_value(
-			"File", original.name, {"file_url": file_url, "s3_object_key": key, "is_private": 1}
-		)
-		return file_url
-
-	def test_get_content_of_copy_reads_key_of_original(self):
+	def test_insert_copy_gets_key_of_original(self):
 		# Core copies attachments with only file_url, e.g. for Communication emails, and unquotes it on insert.
-		file_url = self._insert_private_s3_original("R&D/2026/b+c.txt", "my b & c.txt")
+		file_url = _insert_private_s3_file("R&D/2026/b+c.txt", "my b & c.txt")
 		copy = frappe.get_doc(
 			{"doctype": "File", "file_name": "my b & c.txt", "file_url": file_url, "is_private": 1}
 		).insert()
@@ -1086,7 +1148,7 @@ class TestProtectS3Fields(FrappeTestCase):
 		self.assertIsInstance(copy, controller.S3File)  # override_doctype_class hook is active
 		self.assertEqual(copy.file_url, file_url)
 		self.assertEqual(copy.is_private, 1)
-		self.assertFalse(copy.s3_object_key)
+		self.assertEqual(copy.s3_object_key, "R&D/2026/b+c.txt")
 
 		with patch("frappe_s3_attachment.controller.S3Operations") as s3_operations:
 			s3 = s3_operations.return_value
@@ -1097,17 +1159,8 @@ class TestProtectS3Fields(FrappeTestCase):
 		s3.S3_CLIENT.get_object.assert_called_once_with(Bucket="test-bucket", Key="R&D/2026/b+c.txt")
 
 	def test_insert_copy_of_private_s3_file_checks_access_to_original(self):
-		file_url = self._insert_private_s3_original("copy/2026/secret.txt", "secret.txt")
-		if not frappe.db.exists("User", _PERM_TEST_USER):
-			user = frappe.get_doc(
-				{
-					"doctype": "User",
-					"email": _PERM_TEST_USER,
-					"first_name": "S3 Perm",
-					"send_welcome_email": 0,
-				}
-			).insert()
-			user.add_roles("Desk User")
+		file_url = _insert_private_s3_file("copy/2026/secret.txt", "secret.txt")
+		_ensure_perm_test_user()
 
 		frappe.set_user(_PERM_TEST_USER)
 		with self.assertRaises(frappe.PermissionError):
@@ -1140,6 +1193,129 @@ class TestProtectS3Fields(FrappeTestCase):
 		file_doc.file_url = "https://s3.example/other-bucket/key.png"
 		with self.assertRaises(frappe.PermissionError):
 			file_doc.save()
+
+
+class TestS3Copies(FrappeTestCase):
+	"""Copies of an S3 file (same file_url) share its key and its object."""
+
+	def setUp(self):
+		super().setUp()
+		frappe.set_user("Administrator")
+
+	def test_object_is_deleted_with_last_file_that_uses_it(self):
+		self.addCleanup(frappe.db.after_commit.reset)
+		file_url = _insert_private_s3_file("copy/2026/shared.txt", "shared.txt")
+		original = frappe.get_doc("File", {"file_url": file_url})
+		copy = frappe.get_doc(
+			{"doctype": "File", "file_name": "shared.txt", "file_url": file_url, "is_private": 1}
+		).insert()
+
+		with patch("frappe_s3_attachment.controller.S3Operations") as s3_operations:
+			s3 = s3_operations.return_value
+			s3.get_bucket_of_file.return_value = "test-bucket"
+			s3.S3_CLIENT.get_object.return_value = {"Body": MagicMock(read=MagicMock(return_value=b"hello"))}
+
+			original.delete()
+			frappe.db.after_commit.run()
+			s3.delete_from_s3.assert_not_called()
+			self.assertEqual(frappe.get_doc("File", copy.name).get_content(), "hello")
+
+			copy.delete()
+			frappe.db.after_commit.run()
+			s3.delete_from_s3.assert_called_once_with("copy/2026/shared.txt", "test-bucket")
+
+	def test_privacy_change_of_copy_is_rejected(self):
+		file_url = _insert_private_s3_file("copy/2026/private.txt", "private.txt")
+		copy = frappe.get_doc(
+			{"doctype": "File", "file_name": "private.txt", "file_url": file_url, "is_private": 1}
+		).insert()
+
+		copy.is_private = 0
+		with self.assertRaises(frappe.ValidationError):
+			copy.save()
+
+	def test_patch_gives_copies_the_key_of_original(self):
+		from frappe_s3_attachment.patches.v0_2_3 import backfill_s3_object_key_on_copies
+
+		file_url = _insert_private_s3_file("copy/2026/old.txt", "old.txt")
+		copy = frappe.get_doc(
+			{"doctype": "File", "file_name": "old.txt", "file_url": file_url, "is_private": 1}
+		).insert()
+		# Copies inserted before this version have no key.
+		frappe.db.set_value("File", copy.name, "s3_object_key", None)
+		other = frappe.get_doc({"doctype": "File", "file_url": "https://example.com/other.png"}).insert()
+
+		backfill_s3_object_key_on_copies.execute()
+
+		self.assertEqual(frappe.db.get_value("File", copy.name, "s3_object_key"), "copy/2026/old.txt")
+		self.assertFalse(frappe.db.get_value("File", other.name, "s3_object_key"))
+
+	def test_patch_gives_legacy_copy_the_url_key_and_privacy_of_original(self):
+		from frappe_s3_attachment.patches.v0_2_3 import backfill_s3_object_key_on_copies
+
+		file_url = _insert_private_s3_file("copy/2026/legacy.txt", "legacy.txt")
+		# Before S3File.before_insert, core unquoted the URL of a copy and made it public.
+		legacy_copy = frappe.get_doc(
+			{"doctype": "File", "file_name": "legacy.txt", "file_url": urllib.parse.unquote(file_url)}
+		).insert()
+		self.assertEqual(legacy_copy.is_private, 0)
+		self.assertFalse(legacy_copy.s3_object_key)
+
+		backfill_s3_object_key_on_copies.execute()
+
+		legacy_copy.reload()
+		self.assertEqual(legacy_copy.file_url, file_url)
+		self.assertEqual(legacy_copy.s3_object_key, "copy/2026/legacy.txt")
+		self.assertEqual(legacy_copy.is_private, 1)
+
+	def test_patch_does_not_unquote_url_of_legacy_copy_again(self):
+		from frappe_s3_attachment.patches.v0_2_3 import backfill_s3_object_key_on_copies
+
+		file_url = _insert_private_s3_file("copy/2026/percent.txt", "report%20final.txt")
+		legacy_copy = frappe.get_doc(
+			{"doctype": "File", "file_url": "https://example.com/legacy.txt"}
+		).insert()
+		# Core unquoted the URL once: "report%2520final.txt" became "report%20final.txt".
+		frappe.db.set_value("File", legacy_copy.name, "file_url", urllib.parse.unquote(file_url))
+
+		backfill_s3_object_key_on_copies.execute()
+
+		self.assertEqual(
+			frappe.db.get_value("File", legacy_copy.name, ["file_url", "s3_object_key"]),
+			(file_url, "copy/2026/percent.txt"),
+		)
+
+	def test_patch_skips_legacy_copy_that_matches_two_originals(self):
+		from frappe_s3_attachment.patches.v0_2_3 import backfill_s3_object_key_on_copies
+
+		# urlencode gives "a+b" for the key "a b" and "a%2Bb" for "a+b": both are "a+b" when unquoted.
+		file_url = _insert_private_s3_file("copy/2026/a b.txt", "ab.txt")
+		_insert_private_s3_file("copy/2026/a+b.txt", "ab.txt")
+		legacy_copy = frappe.get_doc(
+			{"doctype": "File", "file_url": "https://example.com/legacy.txt"}
+		).insert()
+		frappe.db.set_value("File", legacy_copy.name, "file_url", urllib.parse.unquote(file_url))
+
+		backfill_s3_object_key_on_copies.execute()
+
+		self.assertIsNone(frappe.db.get_value("File", legacy_copy.name, "s3_object_key"))
+
+	def test_patch_skips_legacy_copy_whose_owner_cannot_read_original(self):
+		"""Before core checked access on insert, users could insert a public row with the URL of any private file."""
+		from frappe_s3_attachment.patches.v0_2_3 import backfill_s3_object_key_on_copies
+
+		_ensure_perm_test_user()
+		# With this key, the unquoted URL is the same as the URL of the original.
+		file_url = _insert_private_s3_file("forged-copy-secret.txt", "secret.txt")
+		forged = frappe.get_doc({"doctype": "File", "file_url": "https://example.com/forged.txt"}).insert()
+		frappe.db.set_value("File", forged.name, {"file_url": file_url, "owner": _PERM_TEST_USER})
+
+		backfill_s3_object_key_on_copies.execute()
+
+		self.assertEqual(
+			frappe.db.get_value("File", forged.name, ["file_url", "s3_object_key", "is_private"]),
+			(file_url, None, 0),
+		)
 
 
 class TestPrivateDuplicateContentHashRegression(FrappeTestCase):

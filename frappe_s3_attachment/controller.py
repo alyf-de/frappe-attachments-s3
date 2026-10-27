@@ -295,8 +295,8 @@ class S3File(File):
 		"""Give a new copy of a private S3 file the encoded URL of its original, if the user can read the original.
 
 		Core unquotes ``file_url`` here, so the copy no longer matches the original: core's access check
-		finds no private file to check, and ``get_content`` finds no key. Core also makes the copy public,
-		because its URL does not start with ``/private``.
+		finds no private file to check, and ``protect_s3_fields`` finds no key for the copy. Core also makes
+		the copy public, because its URL does not start with ``/private``.
 		"""
 		encoded_file_url = self.file_url
 		super().before_insert()
@@ -311,12 +311,6 @@ class S3File(File):
 	def get_content(self) -> bytes | str:
 		"""Read the content of S3 files from S3. Core opens ``file_url`` as a local path, which fails for S3 URLs."""
 		key = self.s3_object_key
-		if not key and self.is_remote_file:
-			# A copy (e.g. a Communication attachment) has no key. Take it from the row this app uploaded,
-			# never from file_url, which users can set.
-			key = frappe.db.get_value(
-				"File", {"file_url": self.file_url, "s3_object_key": ("is", "set")}, "s3_object_key"
-			)
 		if not key:
 			return super().get_content()
 
@@ -372,7 +366,7 @@ def file_upload_to_s3(doc, _method, callback=None):
 				os.remove(file_path)
 
 		def undo_upload():
-			# A custom s3_key_generator can give several files the same key.
+			# Copies of a file share its key, and so can files with a key from a custom s3_key_generator.
 			other_file_urls = frappe.get_all("File", filters={"s3_object_key": key}, pluck="file_url")
 			if bucket not in {s3_upload.get_bucket_of_file(url, key) for url in other_file_urls}:
 				try:
@@ -421,26 +415,35 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 		frappe.local.response["body"] = "Key not found."
 		return
 
-	file_names = frappe.get_all("File", filters={"s3_object_key": key}, pluck="name")
-	if not file_names:
-		# Same error as a denied read, like core Frappe, so callers cannot probe which keys exist.
+	# Only private rows: this serves the main bucket, and a public row can have the same key in the
+	# public bucket (custom s3_key_generator).
+	files = frappe.get_all(
+		"File",
+		filters={"s3_object_key": key, "is_private": 1},
+		fields=["name", "file_name", "s3_object_key"],
+		order_by="creation asc",
+	)
+	# MariaDB matches keys case-insensitively, but S3 keys are case-sensitive.
+	files = [file for file in files if file.s3_object_key == key]
+	# Copies of a file (e.g. Communication attachments) share its key. Like core does for private
+	# files, read access on any of them is enough.
+	for file in files:
+		file_doc = frappe.get_doc("File", file.name)
+		# No check_permission: its messages name the File, so callers could see that the key exists.
+		if frappe.has_permission("File", "read", file_doc):
+			break
+	else:
+		# Same error for an unknown key and a denied read, like core Frappe, so callers cannot probe which keys exist.
 		raise frappe.PermissionError
 
-	# Rows only share a key through a custom s3_key_generator or a key forged before validation existed.
-	# Require read access on all of them: this can deny access to a shared object, but never grants it.
-	file_docs = [frappe.get_doc("File", name) for name in file_names]
-	for file_doc in file_docs:
-		# No check_permission: its messages name the File, so callers could see that the key exists.
-		if not frappe.has_permission("File", "read", file_doc):
-			raise frappe.PermissionError
-
 	s3_upload = S3Operations()
-	# Use the stored name, not the request's, so callers cannot turn an SVG into an inline "PDF".
-	signed_url = s3_upload.get_url(key, file_docs[0].file_name)
+	# Use the name of the oldest File, which uploaded the object. Not the request's or a copy's, so
+	# callers cannot turn an SVG into an inline "PDF".
+	signed_url = s3_upload.get_url(key, files[0].file_name)
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = signed_url
-	file_type = os.path.splitext(file_docs[0].file_name)[1][1:]
-	make_access_log(doctype="File", document=file_docs[0].name, file_type=file_type)
+	file_type = os.path.splitext(file_doc.file_name)[1][1:]
+	make_access_log(doctype="File", document=file_doc.name, file_type=file_type)
 	return
 
 
@@ -540,8 +543,12 @@ def protect_s3_fields(doc, method):
 	which does not run this check.
 	"""
 	if doc.is_new():
-		# The upload in after_insert sets the key. A copy of an S3 file keeps only its file_url.
-		doc.s3_object_key = None
+		# The upload in after_insert sets the key. A copy of an S3 file (e.g. a Communication attachment)
+		# gets the key of the File with the same file_url, never one the user sent. S3File.before_insert
+		# has already checked that the user can read a private original.
+		doc.s3_object_key = frappe.db.get_value(
+			"File", {"file_url": doc.file_url, "s3_object_key": ("is", "set")}, "s3_object_key"
+		)
 		return
 
 	previous = doc.get_doc_before_save()
@@ -561,7 +568,8 @@ def delete_from_cloud(doc, method):
 	def delete_unused_object():
 		s3 = S3Operations()
 		bucket = s3.get_bucket_of_file(file_url, key)
-		# A custom s3_key_generator can give several files the same key, in one or both buckets.
+		# Copies of a file share its key, and so can files with a key from a custom s3_key_generator
+		# (in one or both buckets).
 		# Check the committed rows, because a replacement File can get the same key in the same request.
 		other_file_urls = frappe.get_all("File", filters={"s3_object_key": key}, pluck="file_url")
 		if bucket not in {s3.get_bucket_of_file(url, key) for url in other_file_urls}:
@@ -580,8 +588,8 @@ def update_privacy_in_cloud(doc, method):
 		return
 
 	key = doc.s3_object_key
-	# A custom s3_key_generator, or a key forged before validation existed, can give several files
-	# one object. Its ACL or bucket would then change for all of them.
+	# Copies of a file share its object, and so can files with a key from a custom s3_key_generator.
+	# Its ACL or bucket would then change for all of them.
 	if frappe.db.exists("File", {"s3_object_key": key, "name": ["!=", doc.name]}):
 		frappe.throw(_("This file shares its S3 object with other files, so you cannot change its privacy."))
 
@@ -749,8 +757,8 @@ def move_file_to_local(doc, callback=None):
 
 	# Commit before deleting the S3 object, so a failed commit cannot lose the file.
 	frappe.db.commit()
-	# Ignore "Delete file from cloud", but keep an object that another File still uses:
-	# a custom s3_key_generator can give several files the same key, in one or both buckets.
+	# Ignore "Delete file from cloud", but keep an object that another File still uses: copies of a
+	# file share its key, and so can files with a key from a custom s3_key_generator (in one or both buckets).
 	other_file_urls = frappe.get_all("File", filters={"s3_object_key": key}, pluck="file_url")
 	other_buckets = {s3.get_bucket_of_file(url, key) for url in other_file_urls}
 	if bucket not in other_buckets:
