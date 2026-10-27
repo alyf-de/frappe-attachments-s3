@@ -417,14 +417,18 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 
 	# Only private rows: this serves the main bucket, and a public row can have the same key in the
 	# public bucket (custom s3_key_generator).
-	file_names = frappe.get_all("File", filters={"s3_object_key": key, "is_private": 1}, pluck="name")
+	files = frappe.get_all(
+		"File",
+		filters={"s3_object_key": key, "is_private": 1},
+		fields=["name", "file_name", "s3_object_key"],
+		order_by="creation asc",
+	)
+	# MariaDB matches keys case-insensitively, but S3 keys are case-sensitive.
+	files = [file for file in files if file.s3_object_key == key]
 	# Copies of a file (e.g. Communication attachments) share its key. Like core does for private
 	# files, read access on any of them is enough.
-	for name in file_names:
-		file_doc = frappe.get_doc("File", name)
-		# MariaDB matches keys case-insensitively, but S3 keys are case-sensitive.
-		if file_doc.s3_object_key != key:
-			continue
+	for file in files:
+		file_doc = frappe.get_doc("File", file.name)
 		# No check_permission: its messages name the File, so callers could see that the key exists.
 		if frappe.has_permission("File", "read", file_doc):
 			break
@@ -433,8 +437,9 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 		raise frappe.PermissionError
 
 	s3_upload = S3Operations()
-	# Use the stored name, not the request's, so callers cannot turn an SVG into an inline "PDF".
-	signed_url = s3_upload.get_url(key, file_doc.file_name)
+	# Use the name of the oldest File, which uploaded the object. Not the request's or a copy's, so
+	# callers cannot turn an SVG into an inline "PDF".
+	signed_url = s3_upload.get_url(key, files[0].file_name)
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = signed_url
 	file_type = os.path.splitext(file_doc.file_name)[1][1:]

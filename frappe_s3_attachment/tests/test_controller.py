@@ -648,7 +648,9 @@ class TestControllerCharacterization(FrappeTestCase):
 			return MagicMock(check_permission=MagicMock(), file_name="x.pdf")
 
 		with patch("frappe_s3_attachment.controller.frappe.get_all") as get_all:
-			get_all.return_value = ["FILE-LOOKUP-1"]
+			get_all.return_value = [
+				frappe._dict(name="FILE-LOOKUP-1", file_name="x.pdf", s3_object_key="some/s3/key")
+			]
 			with (
 				patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=selective_get_doc),
 				patch("frappe_s3_attachment.controller.make_access_log"),
@@ -1031,9 +1033,25 @@ class TestGenerateFilePermissions(FrappeTestCase):
 			controller.generate_file(key="copy-key-perm-test")
 
 		self.assertEqual(frappe.local.response["type"], "redirect")
-		params = self.mock_s3_client.generate_presigned_url.call_args.kwargs["Params"]
-		self.assertEqual(params["ResponseContentDisposition"], "inline; filename*=UTF-8''copy.txt")
 		make_access_log.assert_called_once_with(doctype="File", document=copy.name, file_type="txt")
+
+	def test_generate_file_disposition_ignores_file_name_of_copy(self):
+		"""A user can name a copy of an SVG "preview.txt". The SVG must still not render inline."""
+		self._ensure_perm_test_user()
+		frappe.set_user("Administrator")
+		file_url = _insert_private_s3_file("svg-copy-key-perm-test", "active.svg")
+		copy = frappe.get_doc(
+			{"doctype": "File", "file_name": "preview.txt", "file_url": file_url, "is_private": 1}
+		).insert()
+		frappe.db.set_value("File", copy.name, "owner", _PERM_TEST_USER)
+
+		frappe.set_user(_PERM_TEST_USER)
+		frappe.local.response = frappe._dict()
+		with patch("frappe_s3_attachment.controller.frappe.get_doc", side_effect=self._selective_get_doc):
+			controller.generate_file(key="svg-copy-key-perm-test")
+
+		params = self.mock_s3_client.generate_presigned_url.call_args.kwargs["Params"]
+		self.assertEqual(params["ResponseContentDisposition"], "attachment; filename*=UTF-8''active.svg")
 
 	def test_generate_file_ignores_file_whose_key_differs_in_case(self):
 		"""MariaDB compares case-insensitively, but S3 keys are case-sensitive."""
