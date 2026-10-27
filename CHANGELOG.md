@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The default object key no longer contains the file name: `{folder}/{year}/{month}/{day}/{parent_doctype}/{random}{extension}`, with 32 random hex characters. Uploads no longer write the file name to the object metadata, and private `file_url` values no longer contain `file_name`. File names often contain personal data. Existing objects keep their keys, and existing URLs continue to work ([#37](https://github.com/alyf-de/frappe-attachments-s3/issues/37)).
 - Requires Frappe v15.108.0 or later. Older v15 releases raise _Cannot access file path_ when a new upload has the same content as an S3-backed **File** ([#12](https://github.com/alyf-de/frappe-attachments-s3/issues/12)).
 
 ## [0.2.2] - 2026-05-27
