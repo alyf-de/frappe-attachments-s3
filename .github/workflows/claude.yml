@@ -1,30 +1,40 @@
 name: Claude
 
 # Assign an issue to the bot user to let Claude resolve it and open a PR.
+# Review a PR of the bot user to let Claude resolve the review comments.
 #
 # Setup:
 # - Repo variables: CLAUDE_BOT_USER (login of the bot user), CLAUDE_BOT_ID (its numeric user ID)
 # - Repo secrets: CLAUDE_BOT_TOKEN (PAT of the bot user, with repo access), CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`)
+# - The bot user needs read access to alyf-de/skills.
 #
 # The bot pushes with its own PAT, because pushes made with GITHUB_TOKEN don't trigger CI.
 
 on:
   issues:
     types: [assigned]
+  pull_request_review:
+    types: [submitted]
 
 permissions:
   contents: read
 
 jobs:
   resolve:
-    if: github.event.assignee.login == vars.CLAUDE_BOT_USER
+    # The bot's own replies to review comments also count as reviews, so skip those.
+    if: >-
+      (github.event_name == 'issues' && github.event.assignee.login == vars.CLAUDE_BOT_USER) ||
+      (github.event_name == 'pull_request_review'
+        && github.event.pull_request.user.login == vars.CLAUDE_BOT_USER
+        && github.event.review.user.login != vars.CLAUDE_BOT_USER)
     # Job-level, so that assigning someone else doesn't cancel a running bot.
+    # Reviews queue up, so that a run doesn't stop halfway through the threads.
     concurrency:
-      group: claude-issue-${{ github.event.issue.number }}
-      cancel-in-progress: true
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: ${{ github.event_name == 'issues' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    name: Resolve issue
+    name: Claude
 
     services:
       redis-cache:
@@ -48,6 +58,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           token: ${{ secrets.CLAUDE_BOT_TOKEN }}
+          # Empty for issues, so the default branch is used.
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
       - name: Setup Python
@@ -121,7 +133,18 @@ jobs:
         env:
           CI: "Yes"
 
+      - name: Install skills
+        run: |
+          for repo in frappe/skills alyf-de/skills; do
+            gh repo clone "$repo" "$RUNNER_TEMP/$repo" -- --depth 1
+            mkdir -p ~/.claude/skills
+            cp -r "$RUNNER_TEMP/$repo"/skills/* ~/.claude/skills/
+          done
+        env:
+          GH_TOKEN: ${{ secrets.CLAUDE_BOT_TOKEN }}
+
       - name: Resolve issue
+        if: github.event_name == 'issues'
         uses: anthropics/claude-code-action@v1
         env:
           GH_TOKEN: ${{ secrets.CLAUDE_BOT_TOKEN }}
@@ -161,3 +184,30 @@ jobs:
                and a short summary of the cause and the fix.
 
             If you can't resolve the issue, don't open a PR. Explain why with `gh issue comment`.
+
+      # The skill can only run as a slash command, so the bench details go into the system prompt.
+      - name: Resolve review
+        if: github.event_name == 'pull_request_review'
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.CLAUDE_BOT_TOKEN }}
+          RUN_MINIO_INTEGRATION_TESTS: "1"
+          FRAPPE_S3_ATTACHMENT_MINIO_ENDPOINT: "http://127.0.0.1:9000"
+          FRAPPE_S3_ATTACHMENT_MINIO_ACCESS_KEY: "minioadmin"
+          FRAPPE_S3_ATTACHMENT_MINIO_SECRET_KEY: "minioadmin"
+          FRAPPE_S3_ATTACHMENT_MINIO_BUCKET: "frappe-s3-attachment-test"
+          FRAPPE_S3_ATTACHMENT_MINIO_REGION: "us-east-1"
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.CLAUDE_BOT_TOKEN }}
+          bot_name: ${{ vars.CLAUDE_BOT_USER }}
+          bot_id: ${{ vars.CLAUDE_BOT_ID }}
+          allowed_bots: greptile-apps
+          claude_args: >-
+            --add-dir /home/runner/frappe-bench
+            --permission-mode auto
+            --model opus
+            --append-system-prompt "A Frappe bench is at /home/runner/frappe-bench, with the site test_site.
+            The app in the bench is a symlink to this checkout, so your edits are live.
+            Run tests with: cd /home/runner/frappe-bench && bench --site test_site run-tests --app frappe_s3_attachment"
+          prompt: /resolve-review ${{ github.event.pull_request.number }}
