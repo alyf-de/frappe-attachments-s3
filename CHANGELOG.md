@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- _Delete file from cloud_ (`delete_file_from_cloud`) is now enabled by default for new installs, so deleting a **File** also deletes its S3 object. Existing sites keep their current value: administrators who want the new behaviour must enable the setting themselves. The credentials need `s3:DeleteObject`; with bucket versioning, add a lifecycle rule that removes old versions.
 - Requires Frappe v15.108.0 or later. Older v15 releases raise _Cannot access file path_ when a new upload has the same content as an S3-backed **File** ([#12](https://github.com/alyf-de/frappe-attachments-s3/issues/12)).
 
 ## [0.2.2] - 2026-05-27

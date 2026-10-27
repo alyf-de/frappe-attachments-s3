@@ -30,7 +30,7 @@ def _make_settings(**overrides):
 		"folder_name": "",
 		"ignored_doctypes": [],
 		"signed_url_expiry_time": 300,
-		"delete_file_from_cloud": 0,
+		"delete_file_from_cloud": 1,
 	}
 	merged.update({k: v for k, v in overrides.items() if k != "_secret_password"})
 	settings = frappe._dict(merged)
@@ -442,6 +442,10 @@ class TestControllerCharacterization(FrappeTestCase):
 
 		call = self.mock_s3_client.upload_file.call_args
 		self.assertEqual(call.kwargs["ExtraArgs"]["ContentType"], "text/csv")
+
+	def test_delete_file_from_cloud_defaults_to_enabled(self):
+		meta = frappe.get_meta("S3 File Attachment")
+		self.assertEqual(meta.get_field("delete_file_from_cloud").default, "1")
 
 	def test_delete_from_s3_no_op_when_flag_disabled(self):
 		self.settings.delete_file_from_cloud = 0
@@ -1095,6 +1099,21 @@ class TestProtectS3Fields(FrappeTestCase):
 			self.assertEqual(copy.get_content(), "hello")
 
 		s3.S3_CLIENT.get_object.assert_called_once_with(Bucket="test-bucket", Key="R&D/2026/b+c.txt")
+
+	def test_delete_original_keeps_object_used_by_copy(self):
+		file_url = self._insert_private_s3_original("copy/2026/kept.txt", "kept.txt")
+		original_name = frappe.db.get_value("File", {"file_url": file_url}, "name")
+		frappe.get_doc(
+			{"doctype": "File", "file_name": "kept.txt", "file_url": file_url, "is_private": 1}
+		).insert()
+
+		with patch("frappe_s3_attachment.controller.S3Operations") as s3_operations:
+			s3 = s3_operations.return_value
+			s3.get_bucket_of_file.return_value = "test-bucket"
+			frappe.delete_doc("File", original_name)
+			frappe.db.after_commit.run()
+
+		s3.delete_from_s3.assert_not_called()
 
 	def test_insert_copy_of_private_s3_file_checks_access_to_original(self):
 		file_url = self._insert_private_s3_original("copy/2026/secret.txt", "secret.txt")

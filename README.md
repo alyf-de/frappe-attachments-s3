@@ -114,7 +114,9 @@ When `RUN_MINIO_INTEGRATION_TESTS` is unset (or not `"1"`), these tests are skip
 1. Open the **S3 File Attachment** single.
 2. Enter _Bucket Name_, _Access Key_, _Secret Key_, _S3 Bucket Region Name_, optional _Endpoint URL_ (must be `https://` if set), and _Folder Name_ as needed. _Folder Name_ is the default prefix inside the bucket for generated keys.
 3. Use _Migrate Existing Files_ to queue upload of local files still under `sites/<site>/public` and `private` into the bucket. Migration runs on the **long** RQ worker (`bench worker --queue long`); track progress via the linked **RQ Job**. Set _Timeout for Migration Job_ (seconds) on large sites; re-run if the job times out before all files are uploaded.
-4. Enable _Delete file from cloud_ if removed **File** rows should delete the corresponding S3 object.
+4. _Delete file from cloud_ is enabled by default: deleting a **File** also deletes its S3 object, unless another **File** still uses it. If you turn it off, deleted files stay in the bucket, so for an erasure request (for example GDPR) you must delete the object manually.
+   - The credentials need `s3:DeleteObject`. Without it, the object stays in the bucket and the error is logged.
+   - If bucket versioning is on, a delete only adds a delete marker. Add a lifecycle rule that removes old versions.
 
 If _Access Key_ and _Secret Key_ are empty, the app shows an error. To use the boto3 default credentials instead (environment variables, `~/.aws`, instance profile), set `s3_use_default_credentials` in the site config:
 

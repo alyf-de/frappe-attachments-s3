@@ -559,6 +559,9 @@ def delete_from_cloud(doc, method):
 	file_url = doc.file_url
 
 	def delete_unused_object():
+		# A copy (e.g. a Communication attachment) has no key, only the file_url of the original.
+		if frappe.db.exists("File", {"file_url": file_url}):
+			return
 		s3 = S3Operations()
 		bucket = s3.get_bucket_of_file(file_url, key)
 		# A custom s3_key_generator can give several files the same key, in one or both buckets.
