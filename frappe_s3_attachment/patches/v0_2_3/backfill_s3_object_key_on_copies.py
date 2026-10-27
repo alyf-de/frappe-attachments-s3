@@ -43,18 +43,22 @@ def execute():
 	)
 	# A copy made since S3File.before_insert has the URL of its original. Core unquoted the URL of
 	# an older copy once, so compare it with the original's URL unquoted once, not unquote it again.
-	originals_by_url = {row.file_url: row for row in originals}
-	originals_by_unquoted_url = {unquote(row.file_url): row for row in originals}
+	originals_by_url = {}
+	for row in originals:
+		for url in {row.file_url, unquote(row.file_url)}:
+			originals_by_url.setdefault(url, []).append(row)
 	private_copies = frappe.get_all(
 		"File",
 		filters={"s3_object_key": ("is", "not set"), "file_url": ("like", GENERATE_FILE_URL)},
 		fields=["name", "file_url", "owner"],
 	)
 	for copy_file in private_copies:
-		original = originals_by_url.get(copy_file.file_url) or originals_by_unquoted_url.get(
-			copy_file.file_url
-		)
-		if original and frappe.has_permission("File", "read", original.name, user=copy_file.owner):
+		matches = originals_by_url.get(copy_file.file_url, [])
+		# Two originals can match, e.g. the keys "a b" and "a+b" both become "a+b" when unquoted.
+		if len(matches) != 1:
+			continue
+		original = matches[0]
+		if frappe.has_permission("File", "read", original.name, user=copy_file.owner):
 			frappe.db.set_value(
 				"File",
 				copy_file.name,

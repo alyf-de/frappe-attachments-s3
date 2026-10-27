@@ -1252,6 +1252,21 @@ class TestS3Copies(FrappeTestCase):
 			(file_url, "copy/2026/percent.txt"),
 		)
 
+	def test_patch_skips_legacy_copy_that_matches_two_originals(self):
+		from frappe_s3_attachment.patches.v0_2_3 import backfill_s3_object_key_on_copies
+
+		# urlencode gives "a+b" for the key "a b" and "a%2Bb" for "a+b": both are "a+b" when unquoted.
+		file_url = _insert_private_s3_file("copy/2026/a b.txt", "ab.txt")
+		_insert_private_s3_file("copy/2026/a+b.txt", "ab.txt")
+		legacy_copy = frappe.get_doc(
+			{"doctype": "File", "file_url": "https://example.com/legacy.txt"}
+		).insert()
+		frappe.db.set_value("File", legacy_copy.name, "file_url", urllib.parse.unquote(file_url))
+
+		backfill_s3_object_key_on_copies.execute()
+
+		self.assertIsNone(frappe.db.get_value("File", legacy_copy.name, "s3_object_key"))
+
 	def test_patch_skips_legacy_copy_whose_owner_cannot_read_original(self):
 		"""Before core checked access on insert, users could insert a public row with the URL of any private file."""
 		from frappe_s3_attachment.patches.v0_2_3 import backfill_s3_object_key_on_copies
