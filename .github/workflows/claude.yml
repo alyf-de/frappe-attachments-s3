@@ -133,6 +133,12 @@ jobs:
         env:
           CI: "Yes"
 
+      # Installs the pre-commit and commit-msg hooks, so every commit Claude makes runs them.
+      - name: Install pre-commit
+        run: |
+          pip install pre-commit
+          pre-commit install --install-hooks
+
       - name: Install skills
         run: |
           for repo in frappe/skills alyf-de/skills; do
@@ -159,6 +165,7 @@ jobs:
           github_token: ${{ secrets.CLAUDE_BOT_TOKEN }}
           bot_name: ${{ vars.CLAUDE_BOT_USER }}
           bot_id: ${{ vars.CLAUDE_BOT_ID }}
+          settings: '{"attribution": {"commit": "", "pr": ""}}'
           claude_args: >-
             --add-dir /home/runner/frappe-bench
             --permission-mode auto
@@ -202,6 +209,7 @@ jobs:
           github_token: ${{ secrets.CLAUDE_BOT_TOKEN }}
           bot_name: ${{ vars.CLAUDE_BOT_USER }}
           bot_id: ${{ vars.CLAUDE_BOT_ID }}
+          settings: '{"attribution": {"commit": "", "pr": ""}}'
           allowed_bots: greptile-apps
           claude_args: >-
             --add-dir /home/runner/frappe-bench
