@@ -1235,6 +1235,23 @@ class TestS3Copies(FrappeTestCase):
 		self.assertEqual(legacy_copy.s3_object_key, "copy/2026/legacy.txt")
 		self.assertEqual(legacy_copy.is_private, 1)
 
+	def test_patch_does_not_unquote_url_of_legacy_copy_again(self):
+		from frappe_s3_attachment.patches.v0_2_3 import backfill_s3_object_key_on_copies
+
+		file_url = _insert_private_s3_file("copy/2026/percent.txt", "report%20final.txt")
+		legacy_copy = frappe.get_doc(
+			{"doctype": "File", "file_url": "https://example.com/legacy.txt"}
+		).insert()
+		# Core unquoted the URL once: "report%2520final.txt" became "report%20final.txt".
+		frappe.db.set_value("File", legacy_copy.name, "file_url", urllib.parse.unquote(file_url))
+
+		backfill_s3_object_key_on_copies.execute()
+
+		self.assertEqual(
+			frappe.db.get_value("File", legacy_copy.name, ["file_url", "s3_object_key"]),
+			(file_url, "copy/2026/percent.txt"),
+		)
+
 	def test_patch_skips_legacy_copy_whose_owner_cannot_read_original(self):
 		"""Before core checked access on insert, users could insert a public row with the URL of any private file."""
 		from frappe_s3_attachment.patches.v0_2_3 import backfill_s3_object_key_on_copies

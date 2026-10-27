@@ -32,25 +32,28 @@ def execute():
 	# S3File.before_insert now does for a new copy: if the owner of the copy can read the original,
 	# give the copy the URL of the original, its key and Is Private. Other rows stay as they are,
 	# because a user could insert such a row for a file they cannot read.
-	originals = {
-		unquote(row.file_url): row
-		for row in frappe.get_all(
-			"File",
-			filters={
-				"is_private": 1,
-				"s3_object_key": ("is", "set"),
-				"file_url": ("like", GENERATE_FILE_URL),
-			},
-			fields=["name", "file_url", "s3_object_key"],
-		)
-	}
+	originals = frappe.get_all(
+		"File",
+		filters={
+			"is_private": 1,
+			"s3_object_key": ("is", "set"),
+			"file_url": ("like", GENERATE_FILE_URL),
+		},
+		fields=["name", "file_url", "s3_object_key"],
+	)
+	# A copy made since S3File.before_insert has the URL of its original. Core unquoted the URL of
+	# an older copy once, so compare it with the original's URL unquoted once, not unquote it again.
+	originals_by_url = {row.file_url: row for row in originals}
+	originals_by_unquoted_url = {unquote(row.file_url): row for row in originals}
 	private_copies = frappe.get_all(
 		"File",
 		filters={"s3_object_key": ("is", "not set"), "file_url": ("like", GENERATE_FILE_URL)},
 		fields=["name", "file_url", "owner"],
 	)
 	for copy_file in private_copies:
-		original = originals.get(unquote(copy_file.file_url))
+		original = originals_by_url.get(copy_file.file_url) or originals_by_unquoted_url.get(
+			copy_file.file_url
+		)
 		if original and frappe.has_permission("File", "read", original.name, user=copy_file.owner):
 			frappe.db.set_value(
 				"File",
