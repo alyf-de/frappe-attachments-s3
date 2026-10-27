@@ -1103,7 +1103,9 @@ class TestProtectS3Fields(FrappeTestCase):
 	def test_delete_original_keeps_object_used_by_copy(self):
 		file_url = self._insert_private_s3_original("copy/2026/kept.txt", "kept.txt")
 		original_name = frappe.db.get_value("File", {"file_url": file_url}, "name")
-		frappe.get_doc({"doctype": "File", "file_name": "kept.txt", "file_url": file_url, "is_private": 1}).insert()
+		frappe.get_doc(
+			{"doctype": "File", "file_name": "kept.txt", "file_url": file_url, "is_private": 1}
+		).insert()
 
 		with patch("frappe_s3_attachment.controller.S3Operations") as s3_operations:
 			s3 = s3_operations.return_value
