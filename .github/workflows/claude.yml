@@ -166,6 +166,7 @@ jobs:
           bot_name: ${{ vars.CLAUDE_BOT_USER }}
           bot_id: ${{ vars.CLAUDE_BOT_ID }}
           settings: '{"attribution": {"commit": "", "pr": ""}}'
+          display_report: true
           claude_args: >-
             --add-dir /home/runner/frappe-bench
             --permission-mode auto
@@ -210,6 +211,7 @@ jobs:
           bot_name: ${{ vars.CLAUDE_BOT_USER }}
           bot_id: ${{ vars.CLAUDE_BOT_ID }}
           settings: '{"attribution": {"commit": "", "pr": ""}}'
+          display_report: true
           allowed_bots: greptile-apps
           claude_args: >-
             --add-dir /home/runner/frappe-bench
