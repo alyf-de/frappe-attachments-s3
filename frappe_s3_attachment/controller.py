@@ -4,8 +4,6 @@ import mimetypes
 import os
 import re
 import secrets
-import string
-import unicodedata
 import urllib.parse
 from functools import cached_property, partial
 
@@ -108,11 +106,11 @@ class S3Operations:
 			return file_url.removeprefix(prefix).removesuffix(suffix)
 		return self.BUCKET
 
-	def get_file_url(self, key, file_name, is_private):
+	def get_file_url(self, key, is_private):
 		"""Return the ``file_url`` of an uploaded file in the bucket of ``get_bucket``."""
 		if is_private:
 			generate_method = "frappe_s3_attachment.controller.generate_file"
-			query = urllib.parse.urlencode({"key": key, "file_name": file_name})
+			query = urllib.parse.urlencode({"key": key})
 			return f"/api/method/{generate_method}?{query}"
 		return f"{self.S3_CLIENT.meta.endpoint_url}/{self.get_bucket(is_private)}/{key}"
 
@@ -145,10 +143,11 @@ class S3Operations:
 		   ``exc_info`` and the built-in layout below is used. If the hook returns a
 		   falsy value or only slashes, a **warning** is logged and the built-in layout
 		   is used.
-		2. **Default** — ``{folder}/{year}/{month}/{day}/{parent_doctype}/{random}_{file_name}``
-		   with ``folder`` omitted when unset; spaces in ``file_name`` become ``_``;
-		   the file-name tail is reduced to ``[0-9a-zA-Z._-]`` via
-		   ``strip_special_chars``.
+		2. **Default** — ``{folder}/{year}/{month}/{day}/{parent_doctype}/{token}{extension}``
+		   with ``folder`` omitted when unset. ``token`` is 32 random hex characters.
+		   ``extension`` is the lowercase extension of ``file_name``, reduced to
+		   ``[0-9a-zA-Z._-]`` via ``strip_special_chars``. The key does not contain the
+		   file name, because file names often contain personal data.
 
 		Args:
 			file_name: Original **File** *File Name* (hook receives this unchanged).
@@ -179,9 +178,9 @@ class S3Operations:
 					exc_info=True,
 				)
 
-		file_name = file_name.replace(" ", "_")
-		file_name = self.strip_special_chars(file_name)
-		prefix = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+		# Keep the extension: Desk shows image previews of public files by the URL extension.
+		extension = self.strip_special_chars(os.path.splitext(file_name)[1].lower())
+		token = secrets.token_hex(16)
 
 		today = datetime.datetime.now()
 		year = today.strftime("%Y")
@@ -189,9 +188,9 @@ class S3Operations:
 		day = today.strftime("%d")
 
 		if self.folder_name:
-			key = f"{self.folder_name}/{year}/{month}/{day}/{parent_doctype}/{prefix}_{file_name}"
+			key = f"{self.folder_name}/{year}/{month}/{day}/{parent_doctype}/{token}{extension}"
 		else:
-			key = f"{year}/{month}/{day}/{parent_doctype}/{prefix}_{file_name}"
+			key = f"{year}/{month}/{day}/{parent_doctype}/{token}{extension}"
 		return key
 
 	def upload_files_to_s3_with_key(
@@ -205,7 +204,6 @@ class S3Operations:
 		kind = filetype.guess(file_path)
 		content_type = (kind.mime if kind else None) or mimetypes.guess_type(file_name)[0]
 		content_type = content_type or "application/octet-stream"
-		ascii_file_name = unicodedata.normalize("NFKD", file_name).encode("ascii", "ignore").decode("ascii")
 		bucket = self.get_bucket(is_private)
 		transfer_kwargs = {}
 		if callback:
@@ -221,7 +219,6 @@ class S3Operations:
 						"ContentType": content_type,
 						"Metadata": {
 							"ContentType": content_type,
-							"file_name": ascii_file_name,
 						},
 					},
 					**transfer_kwargs,
@@ -389,7 +386,7 @@ def file_upload_to_s3(doc, _method, callback=None):
 		frappe.db.after_commit.add(remove_unused_local_file)
 		frappe.db.after_rollback.add(undo_upload)
 
-		file_url = s3_upload.get_file_url(key, doc.file_name, doc.is_private)
+		file_url = s3_upload.get_file_url(key, doc.is_private)
 
 		# Change file info without triggering any hooks
 		frappe.db.set_value(
@@ -416,6 +413,8 @@ def file_upload_to_s3(doc, _method, callback=None):
 def generate_file(key: str | None = None, file_name: str | None = None):
 	"""
 	Function to stream file from s3.
+
+	``file_name`` is not used. Older private URLs contain it, so the argument stays.
 	"""
 	if not key:
 		frappe.local.response["body"] = "Key not found."
@@ -614,7 +613,7 @@ def update_privacy_in_cloud(doc, method):
 		# Delete only after the commit, so a failed save cannot lose the file.
 		frappe.db.after_commit.add(partial(delete_if_unused, source_bucket))
 
-	file_url = s3.get_file_url(key, doc.file_name, doc.is_private)
+	file_url = s3.get_file_url(key, doc.is_private)
 	doc.db_set("file_url", file_url, update_modified=False)
 
 	if doc.attached_to_doctype and doc.attached_to_name:

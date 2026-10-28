@@ -11,7 +11,7 @@ The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filena
 2. Stream files from S3 when a file is viewed (private files use a time-limited signed URL).
 3. Configure credentials and bucket settings from Desk (**S3 File Attachment** singleton): _Bucket Name_, _Access Key_, _Secret Key_ (stored as **Password**), _S3 Bucket Region Name_, optional _Endpoint URL_ for S3-compatible providers, _Folder Name_, and migration of existing files.
 4. Delete objects in S3 when the **File** document is removed in Desk when _Delete file from cloud_ is enabled.
-5. Files are stored under `{folder}/{year}/{month}/{day}/{doctype}/{random}_{filename}` (see _Folder Name_).
+5. Files are stored under `{folder}/{year}/{month}/{day}/{doctype}/{random}{extension}` (see _Folder Name_).
 6. Optional _Public Bucket Name_: public files go to this separate, publicly readable bucket without an object ACL, while the main bucket stays private. Use it for providers without object ACLs (e.g. Backblaze B2), where a single bucket is either fully public or fully private. If empty, public files go to _Bucket Name_ with a `public-read` ACL.
 7. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** is listed there by default (patch **v0.2.1** backfills the row on migrate if missing; you may remove it to allow **Data Import** files on S3). **Bank Statement Import** is also listed by default if it exists, because it writes back to the file on disk (patch **v0.2.2** adds it on migrate; install ERPNext before this app, or add the row manually).
 8. When _Is Private_ changes on a **File** in S3, the object follows: with a _Public Bucket Name_, it moves to the other bucket; without one, its ACL changes between `private` and `public-read`. The _File URL_ changes accordingly.
@@ -36,7 +36,7 @@ Functional and maintenance differences from [zerodha/frappe-attachments-s3](http
 | Topic | Upstream behaviour | This fork |
 | ----- | ------------------ | --------- |
 | **S3-compatible endpoint** | Uses default AWS endpoints only. | **S3 File Attachment** includes an endpoint URL field; when set, it is passed to `boto3.client(..., endpoint_url=...)` with **path-style** addressing so providers such as **Hetzner Object Storage** work reliably. |
-| **Non-ASCII filenames** | Raw names in S3 metadata / content-disposition can break uploads or downloads for some characters. | Metadata `file_name` is ASCII-normalized; presigned `get_object` responses use RFC 5987 `filename*` for `ResponseContentDisposition` so original Unicode names round-trip in browsers. |
+| **Non-ASCII filenames** | Raw names in S3 metadata / content-disposition can break uploads or downloads for some characters. | Object keys and metadata do not contain the file name; presigned `get_object` responses use RFC 5987 `filename*` for `ResponseContentDisposition` so original Unicode names round-trip in browsers. |
 | **MIME / content type** | Uses **`python-magic`** (`magic.from_file`) to pick `ContentType` for the S3 upload. | Uses **`filetype`** (`filetype.guess`) with a `mimetypes.guess_type` fallback—no `libmagic` dependency and aligned with how newer Frappe versions sniff types. |
 | **S3 object key storage** | Stored the S3 object key in the core **File** `content_hash` field, conflicting with Frappe's content-identity / dedupe semantics and risking column-length issues for long keys. | Stores the key in a dedicated **File** custom field `s3_object_key` (Data, length 255, read-only and visible in the Desk for audit, indexed with prefix 191 on MariaDB) ensured automatically on install/migrate; an idempotent backfill patch copies legacy values from `content_hash`. After upload, **File** `content_hash` is cleared so core duplicate detection does not apply to S3-backed rows (same practical outcome as for remote URLs; see [issue #12](https://github.com/alyf-de/frappe-attachments-s3/issues/12)). |
 | **`generate_file` (signed URL)** | Any authenticated caller could request a presigned URL if they knew or guessed the object key (key stored in **File** `content_hash`). | Resolves the **File** rows by `s3_object_key`, checks read permission on each of them, then redirects; an unknown key raises **Permission Error** (403), the same as a denied read. Users cannot set `s3_object_key`, or change the `file_url` of an S3 file, through the document API. |
@@ -126,7 +126,7 @@ The default credentials belong to the host, so all sites on the bench share them
 
 #### Custom S3 object keys (`s3_key_generator`)
 
-To replace the default `{folder}/{year}/{month}/{day}/{doctype}/{random}_{filename}` layout, register Frappe’s **`s3_key_generator`** hook in your custom app’s `hooks.py` (only the **first** dotted path in the merged hook list is used):
+To replace the default `{folder}/{year}/{month}/{day}/{doctype}/{random}{extension}` layout, register Frappe’s **`s3_key_generator`** hook in your custom app’s `hooks.py` (only the **first** dotted path in the merged hook list is used):
 
 ```python
 # hooks.py (your app)
@@ -142,6 +142,7 @@ def build_object_key(file_name, parent_doctype, parent_name):
 ```
 
 - **Contract:** Your callable is invoked with keyword arguments ``file_name``, ``parent_doctype``, and ``parent_name`` (same names the controller passes). Define matching parameter names (or ``**kwargs``). Return a **valid S3 key** (UTF-8 string; no leading slash). The implementation does **not** run the default path’s `strip_special_chars` on hook output—you own delimiter safety and character choices.
+- **Privacy:** The default key does not contain the file name, because file names often contain personal data. If your key contains the file name, everyone who can list the bucket or read the storage logs sees it.
 - **Uniqueness:** Return a unique key for each **File**. If several **File** rows share a key, a download needs read permission on all of them, and a new upload with the same key overwrites the object of the other rows.
 - **Fallback:** Uncaught exceptions are logged at **error** level with a traceback, then the built-in layout is used. A falsy return, or a value that is empty after stripping slashes, logs a **warning** and falls back to the built-in layout.
 

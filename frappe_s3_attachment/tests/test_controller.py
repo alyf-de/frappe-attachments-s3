@@ -1,5 +1,4 @@
 import os
-import re
 import urllib.parse
 from functools import partial
 from unittest.mock import MagicMock, call, patch
@@ -85,7 +84,7 @@ class TestControllerCharacterization(FrappeTestCase):
 		key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
 		self.assertRegex(
 			key,
-			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[A-Z0-9]{8}_invoice\.pdf$",
+			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[0-9a-f]{32}\.pdf$",
 		)
 
 	def test_key_generator_with_folder_name_prefix(self):
@@ -94,16 +93,51 @@ class TestControllerCharacterization(FrappeTestCase):
 		key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
 		self.assertRegex(
 			key,
-			r"^shop1/\d{4}/\d{2}/\d{2}/Sales Invoice/[A-Z0-9]{8}_invoice\.pdf$",
+			r"^shop1/\d{4}/\d{2}/\d{2}/Sales Invoice/[0-9a-f]{32}\.pdf$",
 		)
 
-	def test_key_generator_replaces_spaces_with_underscores(self):
+	def test_key_generator_keeps_only_clean_lowercase_extension(self):
 		s3 = controller.S3Operations()
-		key = s3.key_generator("my file.pdf", "Quotation", "QTN-0001")
+		key = s3.key_generator("my file.P#NG", "Quotation", "QTN-0001")
 		self.assertRegex(
 			key,
-			r"^\d{4}/\d{2}/\d{2}/Quotation/[A-Z0-9]{8}_my_file\.pdf$",
+			r"^\d{4}/\d{2}/\d{2}/Quotation/[0-9a-f]{32}\.png$",
 		)
+
+	def test_key_generator_without_extension(self):
+		s3 = controller.S3Operations()
+		key = s3.key_generator("README", "Quotation", "QTN-0001")
+		self.assertRegex(
+			key,
+			r"^\d{4}/\d{2}/\d{2}/Quotation/[0-9a-f]{32}$",
+		)
+
+	def test_upload_private_file_does_not_expose_file_name(self):
+		doc = frappe._dict(
+			{
+				"name": "FILE-TEST-PRIVACY",
+				"file_url": "/private/files/Invoice Jane Doe.pdf",
+				"attached_to_doctype": "ToDo",
+				"attached_to_name": "TODO-0001",
+				"file_name": "Invoice Jane Doe.pdf",
+				"is_private": 1,
+			}
+		)
+		with (
+			patch(
+				"frappe_s3_attachment.controller.filetype.guess",
+				return_value=_filetype_kind("application/pdf"),
+			),
+			patch("frappe_s3_attachment.controller.frappe.db.set_value"),
+		):
+			controller.file_upload_to_s3(doc, "after_insert")
+
+		upload_call = self.mock_s3_client.upload_file.call_args
+		key = upload_call.args[2]
+		self.assertRegex(key, r"^\d{4}/\d{2}/\d{2}/ToDo/[0-9a-f]{32}\.pdf$")
+		self.assertNotIn("Jane", key)
+		self.assertNotIn("file_name", upload_call.kwargs["ExtraArgs"]["Metadata"])
+		self.assertNotIn("file_name=", doc.file_url)
 
 	def test_key_generator_uses_s3_key_generator_hook(self):
 		with patch(
@@ -143,7 +177,7 @@ class TestControllerCharacterization(FrappeTestCase):
 					key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
 		self.assertRegex(
 			key,
-			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[A-Z0-9]{8}_invoice\.pdf$",
+			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[0-9a-f]{32}\.pdf$",
 		)
 		mock_log.assert_called_once()
 		call_kw = mock_log.call_args.kwargs
@@ -163,7 +197,7 @@ class TestControllerCharacterization(FrappeTestCase):
 					key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
 		self.assertRegex(
 			key,
-			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[A-Z0-9]{8}_invoice\.pdf$",
+			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[0-9a-f]{32}\.pdf$",
 		)
 		mock_warn.assert_called_once()
 
@@ -181,7 +215,7 @@ class TestControllerCharacterization(FrappeTestCase):
 					key = s3.key_generator("invoice.pdf", "Sales Invoice", "SINV-0001")
 		self.assertRegex(
 			key,
-			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[A-Z0-9]{8}_invoice\.pdf$",
+			r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[0-9a-f]{32}\.pdf$",
 		)
 		mock_warn.assert_called_once()
 
@@ -542,10 +576,7 @@ class TestControllerCharacterization(FrappeTestCase):
 
 		parsed_url = urllib.parse.urlparse(doc.file_url)
 		self.assertEqual(parsed_url.path, "/api/method/frappe_s3_attachment.controller.generate_file")
-		self.assertEqual(
-			urllib.parse.parse_qs(parsed_url.query),
-			{"key": [key], "file_name": ["a&b #1?+.pdf"]},
-		)
+		self.assertEqual(urllib.parse.parse_qs(parsed_url.query), {"key": [key]})
 
 	def test_move_to_s3_keeps_other_parent_image(self):
 		doc = frappe._dict(
@@ -836,23 +867,10 @@ class TestNonAsciiFilenames(FrappeTestCase):
 		self.addCleanup(self.patch_boto3_client.stop)
 		self.addCleanup(self.patch_hooks.stop)
 
-	def test_metadata_filename_is_ascii(self):
-		with patch(
-			"frappe_s3_attachment.controller.filetype.guess",
-			return_value=_filetype_kind("application/pdf"),
-		):
-			s3 = controller.S3Operations()
-			s3.upload_files_to_s3_with_key(
-				"/tmp/Pflanzenrückgabe.pdf",
-				"Pflanzenrückgabe.pdf",
-				1,
-				"Sales Invoice",
-				"SINV-0001",
-			)
-
-		meta_name = self.mock_s3_client.upload_file.call_args.kwargs["ExtraArgs"]["Metadata"]["file_name"]
-		self.assertIsNotNone(re.fullmatch(r"[\x00-\x7f]+", meta_name))
-		self.assertEqual(meta_name, "Pflanzenruckgabe.pdf")
+	def test_non_ascii_file_name_gives_ascii_key(self):
+		s3 = controller.S3Operations()
+		key = s3.key_generator("Pflanzenrückgabe.pdf", "Sales Invoice", "SINV-0001")
+		self.assertRegex(key, r"^\d{4}/\d{2}/\d{2}/Sales Invoice/[0-9a-f]{32}\.pdf$")
 
 	def test_content_disposition_rfc5987(self):
 		self.mock_s3_client.generate_presigned_url.return_value = "https://signed.example/presigned"
