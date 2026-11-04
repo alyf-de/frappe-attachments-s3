@@ -7,6 +7,8 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
 
 class S3FileAttachment(Document):
 	def validate(self):
@@ -29,7 +31,11 @@ class S3FileAttachment(Document):
 			return
 
 		parsed_endpoint = urlparse(endpoint_url)
-		if parsed_endpoint.scheme != "https" or not parsed_endpoint.netloc:
+		# Browsers load files from this endpoint, through presigned URLs and public file URLs. Over HTTP,
+		# they travel in clear text and an HTTPS site blocks them as mixed content. On localhost,
+		# e.g. MinIO for development, neither applies.
+		is_local_http = parsed_endpoint.scheme == "http" and parsed_endpoint.hostname in LOCAL_HOSTS
+		if (parsed_endpoint.scheme != "https" and not is_local_http) or not parsed_endpoint.netloc:
 			frappe.throw(
 				_("Enter a valid HTTPS URL in {0}, for example: {1}.").format(
 					frappe.bold(_("S3 Endpoint URL")), frappe.bold("https://nbg1.your-objectstorage.com")
