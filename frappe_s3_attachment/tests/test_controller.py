@@ -1176,6 +1176,17 @@ class TestProtectS3Fields(FrappeTestCase):
 
 		s3.S3_CLIENT.get_object.assert_called_once_with(Bucket="test-bucket", Key="R&D/2026/b+c.txt")
 
+	def test_insert_copy_ignores_file_whose_url_differs_in_case(self):
+		"""MariaDB compares file_url case-insensitively, but S3 keys are case-sensitive."""
+		file_url = _insert_private_s3_file("case-copy/secret.txt", "secret.txt")
+		_insert_private_s3_file("case-copy/SECRET.txt", "secret.txt")
+
+		copy = frappe.get_doc(
+			{"doctype": "File", "file_name": "secret.txt", "file_url": file_url, "is_private": 1}
+		).insert()
+
+		self.assertEqual(copy.s3_object_key, "case-copy/secret.txt")
+
 	def test_insert_copy_of_private_s3_file_checks_access_to_original(self):
 		file_url = _insert_private_s3_file("copy/2026/secret.txt", "secret.txt")
 		_ensure_perm_test_user()

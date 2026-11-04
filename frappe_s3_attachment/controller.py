@@ -545,8 +545,14 @@ def protect_s3_fields(doc, method):
 		# The upload in after_insert sets the key. A copy of an S3 file (e.g. a Communication attachment)
 		# gets the key of the File with the same file_url, never one the user sent. S3File.before_insert
 		# has already checked that the user can read a private original.
-		doc.s3_object_key = frappe.db.get_value(
-			"File", {"file_url": doc.file_url, "s3_object_key": ("is", "set")}, "s3_object_key"
+		originals = frappe.get_all(
+			"File",
+			filters={"file_url": doc.file_url, "s3_object_key": ("is", "set")},
+			fields=["file_url", "s3_object_key"],
+		)
+		# MariaDB matches file_url case-insensitively, but S3 keys are case-sensitive.
+		doc.s3_object_key = next(
+			(original.s3_object_key for original in originals if original.file_url == doc.file_url), None
 		)
 		return
 
