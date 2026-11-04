@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The default object key no longer contains the file name: `{folder}/{year}/{month}/{day}/{parent_doctype}/{random}{extension}`, with 32 random hex characters. Uploads no longer write the file name to the object metadata, and private `file_url` values no longer contain `file_name`. File names often contain personal data. Existing objects keep their keys, and existing URLs continue to work ([#37](https://github.com/alyf-de/frappe-attachments-s3/issues/37)).
 - Requires Frappe v15.108.0 or later. Older v15 releases raise _Cannot access file path_ when a new upload has the same content as an S3-backed **File** ([#12](https://github.com/alyf-de/frappe-attachments-s3/issues/12)).
 - _S3 Endpoint URL_ accepts `http://` for `localhost`, `127.0.0.1` and `::1`, for example for MinIO in local development. Other hosts still need `https://`, because browsers load files directly from the endpoint.
+- A copy of an S3 file (a **File** with the same `file_url`, e.g. a **Communication** attachment) gets the `s3_object_key` of its original. Patch `v0_2_3.backfill_s3_object_key_on_copies` sets it on existing copies. An existing copy of a private file also gets the URL of the original and _Is Private_, if the owner of the copy can read the original.
+- **`generate_file`** gives access to a private S3 file if the user can read any private **File** that uses its object. Before, the user needed read permission on all of them.
+- You cannot change _Is Private_ of an S3 file while copies of it exist, because they share its object.
+
+### Fixed
+
+- Copies of an S3 file keep working after the original **File** is deleted. If _Delete file from cloud_ is set, the S3 object is deleted with the last **File** that uses it.
 
 ## [0.2.2] - 2026-05-27
 
