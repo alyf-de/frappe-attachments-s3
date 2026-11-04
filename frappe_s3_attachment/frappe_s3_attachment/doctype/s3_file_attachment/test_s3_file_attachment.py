@@ -58,6 +58,16 @@ class TestS3FileAttachment(unittest.TestCase):
 		with self.assertRaises(frappe.ValidationError):
 			S3FileAttachment.validate_endpoint_url(doc)
 
+	def test_validate_endpoint_url_accepts_http_on_localhost(self):
+		"""For local development, e.g. MinIO on the same machine as the browser."""
+		for endpoint_url in ("http://localhost:9000", "http://127.0.0.1:9000", "http://[::1]:9000"):
+			doc = self._make_settings_doc(endpoint_url=endpoint_url)
+			S3FileAttachment.validate_endpoint_url(doc)
+
+		doc = self._make_settings_doc(endpoint_url="http://localhost.example.com:9000")
+		with self.assertRaises(frappe.ValidationError):
+			S3FileAttachment.validate_endpoint_url(doc)
+
 	def test_validate_endpoint_url_rejects_query_and_fragment(self):
 		doc = self._make_settings_doc(endpoint_url="https://fsn1.your-objectstorage.com?x=1")
 		with self.assertRaises(frappe.ValidationError):

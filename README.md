@@ -72,7 +72,7 @@ Optional automation backlog: v16 compatibility audit (test base classes, explici
 
 #### MinIO integration tests
 
-**S3 File Attachment** validates _Endpoint URL_ as **HTTPS-only** in Desk (TLS for real object stores such as Hetzner). The `http://127.0.0.1:9000` value in the commands below is **for these tests only**: settings come from environment variables and are not saved through the form. Pasting the same URL into Desk will fail validation; use MinIO behind HTTPS (for example a local reverse proxy) for a working Desk setup.
+The tests read their settings from environment variables, not from **S3 File Attachment**. To use the same MinIO from Desk, enter `http://127.0.0.1:9000` as _Endpoint URL_. **S3 File Attachment** accepts `http://` only for `localhost`, `127.0.0.1` and `::1`.
 
 The integration suite in `frappe_s3_attachment/tests/test_minio_integration.py` is opt-in and runs only when `RUN_MINIO_INTEGRATION_TESTS=1`.
 
@@ -112,7 +112,7 @@ When `RUN_MINIO_INTEGRATION_TESTS` is unset (or not `"1"`), these tests are skip
 #### Desk configuration
 
 1. Open the **S3 File Attachment** single.
-2. Enter _Bucket Name_, _Access Key_, _Secret Key_, _S3 Bucket Region Name_, optional _Endpoint URL_ (must be `https://` if set), and _Folder Name_ as needed. _Folder Name_ is the default prefix inside the bucket for generated keys.
+2. Enter _Bucket Name_, _Access Key_, _Secret Key_, _S3 Bucket Region Name_, optional _Endpoint URL_ (must be `https://` if set, except `http://` on `localhost`, `127.0.0.1` or `::1` for local development), and _Folder Name_ as needed. _Folder Name_ is the default prefix inside the bucket for generated keys.
 3. Use _Migrate Existing Files_ to queue upload of local files still under `sites/<site>/public` and `private` into the bucket. Migration runs on the **long** RQ worker (`bench worker --queue long`); track progress via the linked **RQ Job**. Set _Timeout for Migration Job_ (seconds) on large sites; re-run if the job times out before all files are uploaded.
 4. Enable _Delete file from cloud_ if removed **File** rows should delete the corresponding S3 object.
 
