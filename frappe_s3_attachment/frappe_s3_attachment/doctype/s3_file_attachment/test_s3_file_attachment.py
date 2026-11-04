@@ -1,16 +1,15 @@
 # Copyright (c) 2018, Frappe and Contributors
 # See license.txt
 
-import unittest
-
 import frappe
+from frappe.tests import UnitTestCase
 
 from frappe_s3_attachment.frappe_s3_attachment.doctype.s3_file_attachment.s3_file_attachment import (
 	S3FileAttachment,
 )
 
 
-class TestS3FileAttachment(unittest.TestCase):
+class TestS3FileAttachment(UnitTestCase):
 	def _make_settings_doc(
 		self,
 		*,
@@ -24,8 +23,8 @@ class TestS3FileAttachment(unittest.TestCase):
 				"endpoint_url": endpoint_url,
 			}
 		)
-		doc.get_password = (
-			lambda fieldname, raise_exception=False: secret_key if fieldname == "secret_key" else ""
+		doc.get_password = lambda fieldname, raise_exception=False: (
+			secret_key if fieldname == "secret_key" else ""
 		)
 		return doc
 

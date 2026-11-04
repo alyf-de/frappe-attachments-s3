@@ -7,14 +7,14 @@ import boto3
 import frappe
 from botocore.client import BaseClient, Config
 from botocore.exceptions import ClientError
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 
 from frappe_s3_attachment import controller
 
 _REAL_FRAPPE_GET_DOC = frappe.get_doc
 
 
-class TestMinioIntegration(FrappeTestCase):
+class TestMinioIntegration(IntegrationTestCase):
 	"""Integration tests against a real MinIO endpoint."""
 
 	@classmethod
@@ -59,7 +59,7 @@ class TestMinioIntegration(FrappeTestCase):
 		self.addCleanup(self.patch_get_doc.stop)
 
 	def tearDown(self):
-		# Tests commit to run the after_commit cleanup, escaping FrappeTestCase's
+		# Tests commit to run the after_commit cleanup, escaping IntegrationTestCase's
 		# rollback. Clean up the File rows we created so subsequent runs don't
 		# collide on content_hash duplicate detection in core File.save_file.
 		for name in self.created_file_names:

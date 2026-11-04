@@ -3,7 +3,7 @@
 Frappe app to make file upload automatically upload and read from S3.  
 Maintained as a fork of [zerodha/frappe-attachments-s3](https://github.com/zerodha/frappe-attachments-s3) under [alyf-de/frappe-attachments-s3](https://github.com/alyf-de/frappe-attachments-s3).
 
-The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, a dedicated **File** `s3_object_key` locator field with automatic install/migrate setup, characterization and TDD tests, and tagged. Optional next steps include a consolidated **v16** forward-compatibility pass and further hardening—not required for normal installs.
+The **v16** line supports Frappe v16 (Python 3.14+). It ships custom endpoint support (e.g. Hetzner), ASCII-safe filenames, permission-checked signed URLs, a dedicated **File** `s3_object_key` locator field with automatic install/migrate setup, and characterization and TDD tests.
 
 #### Features
 
@@ -18,16 +18,16 @@ The **v15** line ships custom endpoint support (e.g. Hetzner), ASCII-safe filena
 
 #### Installation
 
-1. `bench get-app https://github.com/alyf-de/frappe-attachments-s3 --branch version-15`
+1. `bench get-app https://github.com/alyf-de/frappe-attachments-s3 --branch version-16`
 2. `bench install-app frappe_s3_attachment`
 
-To pin an exact revision, checkout tag [`v0.2.2`](https://github.com/alyf-de/frappe-attachments-s3/releases/tag/v0.2.2) after clone or install from the `version-15` branch for the latest fixes on that line. Release notes: [CHANGELOG.md](CHANGELOG.md).
+For Frappe v15, use the `version-15` branch. Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 #### Branches
 
 - `develop`: default branch; upstream rebases and feature work land here first.
-- `version-15`: stable branch for Frappe v15 (customer installs typically use this branch or tag **v0.2.2**).
-- `version-16`: to be created at v16 cutover.
+- `version-15`: stable branch for Frappe v15.
+- `version-16`: stable branch for Frappe v16.
 
 #### Changes vs upstream
 
@@ -64,7 +64,6 @@ git diff b595155..HEAD -- path/to/file.py
 These match upstream unless noted; further hardening is tracked as follow-up work, not regressions introduced only in this fork:
 
 - **Duplicate uploads**: S3-managed **File** rows intentionally keep `content_hash` empty after upload so Frappe does not deduplicate against them (aligned with remote-file behaviour and [issue #12](https://github.com/alyf-de/frappe-attachments-s3/issues/12)). Handling duplication for remote resources would require adaptions to the core File DocType and is currently considered out of scope for this app. 
-- **File class override** (this fork): the app replaces the **File** class with `override_doctype_class`, so that `get_content()` reads S3 files from S3. In v15, only one app can override **File** this way; another app that also overrides it disables this fix, or loses its own override. In v16, use `extend_doctype_class` instead.
 - **Privacy of shared objects** (this fork): if several **File** rows use the same S3 object (copies of a file, e.g. **Communication** attachments, or files with a key from a custom `s3_key_generator`), changing _Is Private_ on one of them is rejected.
 - **Privacy change is not atomic** (this fork): S3 is changed during the save; a rollback reverts the S3 change. If removing the old public copy fails after the commit, the old public URL stays readable and an error is shown; make the file public and private again to retry. A rollback after a change to public can expose the contents briefly, to readers who already know the object key.
 
@@ -138,9 +137,9 @@ s3_key_generator = ["my_app.s3_keys.build_object_key"]
 ```python
 # my_app/s3_keys.py
 def build_object_key(file_name, parent_doctype, parent_name):
-    # Return a non-empty str (or str-like value); leading/trailing "/" are stripped for you.
-    # Return None or "" to defer to the built-in layout from frappe_s3_attachment (warning logged).
-    return f"my-prefix/{parent_doctype}/{parent_name}/{file_name}"
+	# Return a non-empty str (or str-like value); leading/trailing "/" are stripped for you.
+	# Return None or "" to defer to the built-in layout from frappe_s3_attachment (warning logged).
+	return f"my-prefix/{parent_doctype}/{parent_name}/{file_name}"
 ```
 
 - **Contract:** Your callable is invoked with keyword arguments ``file_name``, ``parent_doctype``, and ``parent_name`` (same names the controller passes). Define matching parameter names (or ``**kwargs``). Return a **valid S3 key** (UTF-8 string; no leading slash). The implementation does **not** run the default path’s `strip_special_chars` on hook output—you own delimiter safety and character choices.

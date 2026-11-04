@@ -46,16 +46,16 @@ jobs:
         ports:
           - 11000:6379
       mariadb:
-        image: mariadb:10.6
+        image: mariadb:11.8
         env:
-          MYSQL_ROOT_PASSWORD: root
+          MARIADB_ROOT_PASSWORD: root
         ports:
           - 3306:3306
-        options: --health-cmd="mariadb-admin ping" --health-interval=5s --health-timeout=2s --health-retries=3
+        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=5s --health-timeout=2s --health-retries=3
 
     steps:
       - name: Clone
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           token: ${{ secrets.CLAUDE_BOT_TOKEN }}
           # Empty for issues, so the default branch is used.
@@ -63,22 +63,20 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.14"
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
-          node-version: 18
+          node-version: 24
           check-latest: true
 
       - name: Install MariaDB Client
         run: |
           sudo apt update
           sudo apt-get install mariadb-client
-          # The new client requires SSL, but the mariadb:10.6 service does not offer it.
-          printf '[client]\nskip-ssl\n' > ~/.my.cnf
 
       # MinIO no longer publishes free images; Chainguard maintains a build of the open-source server.
       - name: Start MinIO
@@ -102,7 +100,7 @@ jobs:
       - name: Setup
         run: |
           pip install frappe-bench boto3
-          bench init --frappe-branch version-15 --skip-redis-config-generation --skip-assets --python "$(which python)" ~/frappe-bench
+          bench init --frappe-branch version-16 --skip-redis-config-generation --skip-assets --python "$(which python)" ~/frappe-bench
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL character_set_server = 'utf8mb4'"
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL collation_server = 'utf8mb4_unicode_ci'"
           python - <<'PY'

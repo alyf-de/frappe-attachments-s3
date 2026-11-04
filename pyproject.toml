@@ -4,7 +4,7 @@ authors = [
     { name = "ALYF GmbH", email = "hallo@alyf.de" },
 ]
 description = "Frappe app to make file upload automatically upload and read from S3"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 readme = "README.md"
 license = { text = "MIT" }
 dynamic = ["version"]
@@ -13,7 +13,6 @@ dependencies = [
     "boto3>=1.34.0",
     "botocore>=1.34.0",
     "s3transfer>=0.10.0",
-    "six>=1.16.0",
 ]
 
 [build-system]
@@ -21,11 +20,11 @@ requires = ["flit_core >=3.4,<4"]
 build-backend = "flit_core.buildapi"
 
 [tool.bench.frappe-dependencies]
-frappe = ">=15.108.0,<16.0.0"
+frappe = ">=16.0.0,<17.0.0"
 
 [tool.ruff]
 line-length = 110
-target-version = "py310"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = [

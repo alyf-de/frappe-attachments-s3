@@ -1,5 +1,6 @@
-import unittest
 from unittest.mock import MagicMock, call, patch
+
+from frappe.tests import UnitTestCase
 
 from frappe_s3_attachment import install
 from frappe_s3_attachment.install import (
@@ -13,7 +14,7 @@ from frappe_s3_attachment.install import (
 )
 
 
-class TestInstall(unittest.TestCase):
+class TestInstall(UnitTestCase):
 	def test_ensure_default_ignored_doctype_appends_defaults_when_missing(self):
 		settings = MagicMock()
 		settings.ignored_doctypes = []
@@ -78,7 +79,7 @@ class TestInstall(unittest.TestCase):
 		settings.save.assert_not_called()
 
 
-class TestS3ObjectKeyCustomField(unittest.TestCase):
+class TestS3ObjectKeyCustomField(UnitTestCase):
 	def test_ensure_s3_object_key_custom_field_creates_visible_readonly_field(self):
 		with patch("frappe_s3_attachment.install.create_custom_fields") as create:
 			ensure_s3_object_key_custom_field()
@@ -97,7 +98,7 @@ class TestS3ObjectKeyCustomField(unittest.TestCase):
 		self.assertEqual(field["module"], "Frappe S3 Attachment")
 
 
-class TestS3ObjectKeyIndex(unittest.TestCase):
+class TestS3ObjectKeyIndex(UnitTestCase):
 	def test_mariadb_uses_prefix_index(self):
 		mock_db = MagicMock()
 		mock_db.db_type = "mariadb"
@@ -123,7 +124,7 @@ class TestS3ObjectKeyIndex(unittest.TestCase):
 		)
 
 
-class TestSetupHooks(unittest.TestCase):
+class TestSetupHooks(UnitTestCase):
 	def test_after_install_chains_setup_steps(self):
 		with patch("frappe_s3_attachment.install.ensure_default_ignored_doctype") as ignored:
 			with patch("frappe_s3_attachment.install.ensure_s3_object_key_custom_field") as field:

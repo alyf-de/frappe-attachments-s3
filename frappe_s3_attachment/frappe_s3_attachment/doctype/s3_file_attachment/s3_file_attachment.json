@@ -134,7 +134,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-27 05:08:54.889647",
+ "modified": "2026-11-04 23:44:18.484177",
  "modified_by": "Administrator",
  "module": "Frappe S3 Attachment",
  "name": "S3 File Attachment",
@@ -153,7 +153,7 @@
  ],
  "quick_entry": 1,
  "row_format": "Dynamic",
- "sort_field": "modified",
+ "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],
  "track_changes": 1

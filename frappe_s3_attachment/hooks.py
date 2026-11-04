@@ -88,7 +88,7 @@ after_migrate = "frappe_s3_attachment.install.after_migrate"
 
 doctype_js = {"File": "public/js/file.js"}
 
-override_doctype_class = {"File": "frappe_s3_attachment.controller.S3File"}
+extend_doctype_class = {"File": "frappe_s3_attachment.controller.S3File"}
 
 doc_events = {
 	"File": {

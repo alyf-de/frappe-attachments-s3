@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, call, patch
 
 import frappe
 from botocore.exceptions import ClientError
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase, UnitTestCase
 from rq.timeouts import JobTimeoutException
 
 from frappe_s3_attachment import controller
@@ -43,7 +43,7 @@ def _make_settings(**overrides):
 	return settings
 
 
-class TestControllerCharacterization(FrappeTestCase):
+class TestControllerCharacterization(IntegrationTestCase):
 	def setUp(self):
 		super().setUp()
 		self.settings = _make_settings()
@@ -748,7 +748,7 @@ class TestControllerCharacterization(FrappeTestCase):
 		self.mock_s3_client.get_object.assert_not_called()
 
 
-class TestEndpointUrl(FrappeTestCase):
+class TestEndpointUrl(UnitTestCase):
 	def setUp(self):
 		super().setUp()
 		self.settings = _make_settings()
@@ -786,7 +786,7 @@ class TestEndpointUrl(FrappeTestCase):
 		self.assertEqual(kwargs["config"].s3, None)
 
 
-class TestCredentials(FrappeTestCase):
+class TestCredentials(UnitTestCase):
 	def setUp(self):
 		super().setUp()
 		self.patch_boto3_client = patch("frappe_s3_attachment.controller.boto3.client")
@@ -848,7 +848,7 @@ class TestCredentials(FrappeTestCase):
 		controller.boto3.client.assert_not_called()
 
 
-class TestNonAsciiFilenames(FrappeTestCase):
+class TestNonAsciiFilenames(UnitTestCase):
 	def setUp(self):
 		super().setUp()
 		self.settings = _make_settings()
@@ -904,7 +904,7 @@ class TestNonAsciiFilenames(FrappeTestCase):
 _PERM_TEST_USER = "s3_attach_perm_test@test.local"
 
 
-class TestGenerateFilePermissions(FrappeTestCase):
+class TestGenerateFilePermissions(IntegrationTestCase):
 	"""Gate generate_file behind File read permission (s3_object_key → File row)."""
 
 	def setUp(self):
@@ -1131,7 +1131,7 @@ def _ensure_perm_test_user():
 		user.add_roles("Desk User")
 
 
-class TestProtectS3Fields(FrappeTestCase):
+class TestProtectS3Fields(IntegrationTestCase):
 	"""Users cannot point a File at another S3 object. Inserts without a local file do not upload."""
 
 	def setUp(self):
@@ -1167,7 +1167,7 @@ class TestProtectS3Fields(FrappeTestCase):
 			{"doctype": "File", "file_name": "my b & c.txt", "file_url": file_url, "is_private": 1}
 		).insert()
 		copy = frappe.get_doc("File", copy.name)
-		self.assertIsInstance(copy, controller.S3File)  # override_doctype_class hook is active
+		self.assertIsInstance(copy, controller.S3File)  # extend_doctype_class hook is active
 		self.assertEqual(copy.file_url, file_url)
 		self.assertEqual(copy.is_private, 1)
 		self.assertEqual(copy.s3_object_key, "R&D/2026/b+c.txt")
@@ -1228,7 +1228,7 @@ class TestProtectS3Fields(FrappeTestCase):
 			file_doc.save()
 
 
-class TestS3Copies(FrappeTestCase):
+class TestS3Copies(IntegrationTestCase):
 	"""Copies of an S3 file (same file_url) share its key and its object."""
 
 	def setUp(self):
@@ -1351,7 +1351,7 @@ class TestS3Copies(FrappeTestCase):
 		)
 
 
-class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
+class TestPrivateDuplicateContentHashRegression(IntegrationTestCase):
 	"""Regression for alyf-de/frappe-attachments-s3#12.
 
 	Core ``save_file`` duplicate detection matches a prior S3-backed row by
@@ -1431,7 +1431,7 @@ class TestPrivateDuplicateContentHashRegression(FrappeTestCase):
 		self.assertTrue(second.exists_on_disk())
 
 
-class TestUploadTransaction(FrappeTestCase):
+class TestUploadTransaction(IntegrationTestCase):
 	def test_upload_does_not_commit_callers_transaction(self):
 		key = "2026/ToDo/ABCDEFGH_note.txt"
 		s3 = MagicMock()
