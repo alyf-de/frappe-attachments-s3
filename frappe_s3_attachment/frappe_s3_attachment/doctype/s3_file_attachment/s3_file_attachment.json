@@ -31,8 +31,8 @@
    "label": "General Configuration"
   },
   {
-   "default": "0",
-   "description": "Toggle whether files that are deleted in the app will also be deleted in the S3 bucket.",
+   "default": "1",
+   "description": "Delete the S3 object when its File is deleted. If you turn this off, deleted files stay in the bucket and you must delete the object manually, for example for an erasure request. The credentials need s3:DeleteObject. If bucket versioning is on, a delete only adds a delete marker: add a lifecycle rule that removes old versions.",
    "fieldname": "delete_file_from_cloud",
    "fieldtype": "Check",
    "label": "Delete file from cloud "
@@ -134,7 +134,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-16 13:10:46.828021",
+ "modified": "2026-10-27 05:08:54.889647",
  "modified_by": "Administrator",
  "module": "Frappe S3 Attachment",
  "name": "S3 File Attachment",
