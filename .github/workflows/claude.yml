@@ -170,6 +170,7 @@ jobs:
           claude_args: >-
             --add-dir /home/runner/frappe-bench
             --permission-mode auto
+            --allowedTools "Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*)"
             --model opus
           prompt: |
             Resolve issue #${{ github.event.issue.number }} in ${{ github.repository }}.
@@ -216,6 +217,7 @@ jobs:
           claude_args: >-
             --add-dir /home/runner/frappe-bench
             --permission-mode auto
+            --allowedTools "Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*)"
             --model opus
             --append-system-prompt "A Frappe bench is at /home/runner/frappe-bench, with the site test_site.
             The app in the bench is a symlink to this checkout, so your edits are live.
