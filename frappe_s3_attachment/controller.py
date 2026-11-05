@@ -608,31 +608,44 @@ def rewrite_public_file_urls():
 	files = frappe.get_all(
 		"File",
 		filters={"is_private": 0, "s3_object_key": ("is", "set")},
-		fields=["name", "file_url", "s3_object_key", "attached_to_doctype", "attached_to_name"],
+		fields=["name"],
 	)
 	for file in files:
-		bucket = s3.get_bucket_of_public_url(file.file_url, file.s3_object_key)
-		if not bucket:
-			# For example, the URL of an old endpoint. Its bucket is unknown.
-			continue
-
-		new_file_url = s3.get_public_file_url(bucket, file.s3_object_key)
-		if new_file_url == file.file_url:
-			continue
-
-		# Change file info without triggering any hooks, like file_upload_to_s3
-		frappe.db.set_value("File", file.name, "file_url", new_file_url, update_modified=False)
-		if file.attached_to_doctype and file.attached_to_name:
-			image_field = frappe.get_meta(file.attached_to_doctype).get("image_field")
-			parent_image = image_field and frappe.db.get_value(
-				file.attached_to_doctype, file.attached_to_name, image_field
-			)
-			if parent_image == file.file_url:
-				frappe.db.set_value(
-					file.attached_to_doctype, file.attached_to_name, image_field, new_file_url
-				)
+		rewrite_public_file_url(s3, file.name)
 		# Keep the progress of each file, and do not lock all rows until the end.
 		frappe.db.commit()
+
+
+def rewrite_public_file_url(s3, file_name):
+	# Lock and read the row again: a user can move the file or make it private while the job runs.
+	file = frappe.db.get_value(
+		"File",
+		file_name,
+		["file_url", "is_private", "s3_object_key", "attached_to_doctype", "attached_to_name"],
+		as_dict=True,
+		for_update=True,
+	)
+	if not file or file.is_private or not file.s3_object_key:
+		return
+
+	bucket = s3.get_bucket_of_public_url(file.file_url, file.s3_object_key)
+	if not bucket:
+		# For example, the URL of an old endpoint. Its bucket is unknown.
+		return
+
+	new_file_url = s3.get_public_file_url(bucket, file.s3_object_key)
+	if new_file_url == file.file_url:
+		return
+
+	# Change file info without triggering any hooks, like file_upload_to_s3
+	frappe.db.set_value("File", file_name, "file_url", new_file_url, update_modified=False)
+	if file.attached_to_doctype and file.attached_to_name:
+		image_field = frappe.get_meta(file.attached_to_doctype).get("image_field")
+		parent_image = image_field and frappe.db.get_value(
+			file.attached_to_doctype, file.attached_to_name, image_field
+		)
+		if parent_image == file.file_url:
+			frappe.db.set_value(file.attached_to_doctype, file.attached_to_name, image_field, new_file_url)
 
 
 def protect_s3_fields(doc, method):

@@ -568,3 +568,23 @@ class TestMinioIntegration(IntegrationTestCase):
 
 		self.assertEqual(response.content_type, "text/html")
 		self.assertTrue(response.headers["Content-Disposition"].startswith("attachment;"))
+
+	def test_minio_mode_change_skips_file_moved_to_local_during_rewrite(self):
+		file_doc = self._upload("minio-moved-during-rewrite.png", "image", is_private=0)
+		listed_files = frappe.get_all(
+			"File",
+			filters={"name": file_doc.name},
+			fields=["name", "file_url", "s3_object_key", "attached_to_doctype", "attached_to_name"],
+		)
+		with patch("frappe_s3_attachment.controller.frappe.publish_progress"):
+			controller.run_move_file(file_doc.name, to_s3=False)
+		self.uploaded_keys.discard(file_doc.s3_object_key)
+		file_doc.reload()
+		local_url = file_doc.file_url
+
+		self.settings.download_mode = "Proxy"
+		# The file moves to local storage after the job lists it.
+		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=listed_files):
+			controller.rewrite_public_file_urls()
+
+		self.assertEqual(frappe.db.get_value("File", file_doc.name, "file_url"), local_url)
