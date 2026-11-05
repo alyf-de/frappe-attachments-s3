@@ -11,7 +11,9 @@
   "signed_url_expiry_time",
   "credentials_section",
   "bucket_name",
+  "download_mode",
   "public_bucket_name",
+  "public_download_mode",
   "access_key",
   "secret_key",
   "section_break_7",
@@ -130,11 +132,28 @@
    "fieldname": "public_bucket_name",
    "fieldtype": "Data",
    "label": "Public Bucket Name"
+  },
+  {
+   "default": "Redirect",
+   "description": "Redirect: browsers download files directly from S3. Proxy: Frappe streams each download from S3, for buckets that browsers cannot reach. Proxy downloads hold a server worker for the whole transfer and do not support Range requests (no video seeking).",
+   "fieldname": "download_mode",
+   "fieldtype": "Select",
+   "label": "Download Mode",
+   "options": "Redirect\nProxy"
+  },
+  {
+   "default": "Redirect",
+   "depends_on": "public_bucket_name",
+   "description": "Download Mode of the Public Bucket.",
+   "fieldname": "public_download_mode",
+   "fieldtype": "Select",
+   "label": "Public Download Mode",
+   "options": "Redirect\nProxy"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-11-04 23:44:18.484177",
+ "modified": "2026-11-06 04:15:21.209083",
  "modified_by": "Administrator",
  "module": "Frappe S3 Attachment",
  "name": "S3 File Attachment",
