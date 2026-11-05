@@ -14,11 +14,11 @@ app_license = "MIT"
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/frappe_s3_attachment/css/frappe_s3_attachment.css"
-# app_include_js = "/assets/frappe_s3_attachment/js/frappe_s3_attachment.js"
+app_include_js = "/assets/frappe_s3_attachment/js/direct_upload.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/frappe_s3_attachment/css/frappe_s3_attachment.css"
-# web_include_js = "/assets/frappe_s3_attachment/js/frappe_s3_attachment.js"
+web_include_js = "/assets/frappe_s3_attachment/js/direct_upload.js"
 
 # include js in page
 # page_js = {"page" : "public/js/file.js"}

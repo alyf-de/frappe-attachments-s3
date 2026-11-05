@@ -9,6 +9,7 @@
   "delete_file_from_cloud",
   "column_break_bngr",
   "signed_url_expiry_time",
+  "allow_direct_upload",
   "credentials_section",
   "bucket_name",
   "public_bucket_name",
@@ -130,11 +131,18 @@
    "fieldname": "public_bucket_name",
    "fieldtype": "Data",
    "label": "Public Bucket Name"
+  },
+  {
+   "default": "0",
+   "description": "Let browsers upload files directly to S3 with a presigned POST. The bucket needs a CORS rule that allows POST from this site.",
+   "fieldname": "allow_direct_upload",
+   "fieldtype": "Check",
+   "label": "Allow Direct Upload"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-11-04 23:44:18.484177",
+ "modified": "2026-11-06 04:14:56.302833",
  "modified_by": "Administrator",
  "module": "Frappe S3 Attachment",
  "name": "S3 File Attachment",

@@ -14,15 +14,20 @@ from boto3.s3.transfer import TransferConfig
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from frappe import _
+from frappe.core.api.file import get_max_file_size
 from frappe.core.doctype.access_log.access_log import make_access_log
-from frappe.core.doctype.file.file import File
+from frappe.core.doctype.file.file import File, MaxFileSizeReachedError
 from frappe.core.doctype.file.utils import generate_file_name
+from frappe.handler import ALLOWED_MIMETYPES, check_write_permission
 from frappe.utils import cint, get_files_path, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
 from frappe.utils.response import FORCE_DOWNLOAD_EXTENSIONS
 from rq.timeouts import JobTimeoutException
 
 MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
+DIRECT_UPLOAD_CACHE_PREFIX = "frappe_s3_attachment:direct_upload:"
+# shortcut: fixed one-hour limit to upload a file directly; make it a setting if that fails
+DIRECT_UPLOAD_EXPIRY = 3600
 
 
 class S3Operations:
@@ -757,6 +762,160 @@ def move_file_to_local(doc, callback=None):
 				reference_doctype="File",
 				reference_name=doc.name,
 			)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def upload_start(
+	file_name: str,
+	file_size: int,
+	doctype: str | None = None,
+	docname: str | None = None,
+	fieldname: str | None = None,
+	folder: str | None = None,
+	is_private: int = 1,
+):
+	"""Let the browser upload a file directly to S3 (step 1 of 2, if *Allow Direct Upload* is set).
+
+	Does the checks of Frappe's ``upload_file`` and returns a presigned POST for a new object key,
+	and a token for ``upload_complete``.
+	"""
+	s3 = S3Operations()
+	if not s3.s3_settings_doc.allow_direct_upload:
+		frappe.throw(_("Direct upload to S3 is not allowed."), frappe.PermissionError)
+
+	ignore_permissions = check_upload_permission(doctype, docname)
+	parent_doctype = doctype or "File"
+	if s3.is_ignored_doctype(parent_doctype):
+		frappe.throw(_("Files attached to {0} are kept locally.").format(_(parent_doctype)))
+
+	file_size = cint(file_size)
+	max_file_size = get_max_file_size()
+	if file_size > max_file_size:
+		frappe.throw(
+			_("File size exceeded the maximum allowed size of {0} MB").format(max_file_size / 1048576),
+			exc=MaxFileSizeReachedError,
+		)
+
+	is_private = cint(is_private)
+	# The core checks of a File insert that must pass before the upload: the object is public at once.
+	draft_file = frappe.new_doc(
+		"File",
+		file_name=file_name,
+		is_private=is_private,
+		attached_to_doctype=doctype,
+		attached_to_name=docname,
+	)
+	draft_file.validate_file_extension()
+	draft_file.enforce_public_file_restrictions()
+	draft_file.validate_attachment_limit()
+	content_type = mimetypes.guess_type(file_name)[0]
+	user = frappe.session.user
+	if (user == "Guest" or not frappe.get_lazy_doc("User", user).has_desk_access()) and (
+		content_type not in ALLOWED_MIMETYPES
+	):
+		frappe.throw(_("You can only upload JPG, PNG, GIF, PDF, TXT, CSV or Microsoft documents."))
+
+	key = s3.key_generator(file_name, parent_doctype, docname)
+	fields = {"Content-Type": content_type or "application/octet-stream"}
+	# Same ACL as upload_files_to_s3_with_key
+	if not is_private and not s3.PUBLIC_BUCKET:
+		fields["acl"] = "public-read"
+	conditions = [{name: value} for name, value in fields.items()]
+	conditions.append(["content-length-range", file_size, file_size])
+	presigned_post = s3.S3_CLIENT.generate_presigned_post(
+		s3.get_bucket(is_private), key, Fields=fields, Conditions=conditions, ExpiresIn=DIRECT_UPLOAD_EXPIRY
+	)
+
+	token = secrets.token_urlsafe(32)
+	pending_upload = {
+		"user": user,
+		"ignore_permissions": ignore_permissions,
+		"key": key,
+		"bucket": s3.get_bucket(is_private),
+		"file_url": s3.get_file_url(key, is_private),
+		"file_size": file_size,
+		"file_name": file_name,
+		"is_private": is_private,
+		"attached_to_doctype": doctype,
+		"attached_to_name": docname,
+		"attached_to_field": fieldname,
+		"folder": folder,
+	}
+	frappe.cache.set_value(
+		DIRECT_UPLOAD_CACHE_PREFIX + token, pending_upload, expires_in_sec=DIRECT_UPLOAD_EXPIRY
+	)
+	return {"url": presigned_post["url"], "fields": presigned_post["fields"], "token": token}
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def upload_complete(token: str):
+	"""Create the **File** of a direct upload, after the browser has uploaded it to S3 (step 2 of 2).
+
+	Accepts only the token from ``upload_start``, never an object key: otherwise a user could link the
+	private object of another user to their own **File**, and read it through ``generate_file``.
+	"""
+	cache_key = DIRECT_UPLOAD_CACHE_PREFIX + token
+	upload = frappe.cache.get_value(cache_key)
+	if not upload or upload["user"] != frappe.session.user:
+		raise frappe.PermissionError
+
+	s3 = S3Operations()
+	try:
+		uploaded_object = s3.S3_CLIENT.head_object(Bucket=upload["bucket"], Key=upload["key"])
+	except ClientError:
+		frappe.throw(_("The file is not in S3 yet. Upload it first."))
+	if uploaded_object["ContentLength"] != upload["file_size"]:
+		frappe.throw(_("The file in S3 does not have the announced size."))
+
+	# Delete the token only now, so the browser can try again if it was too early.
+	frappe.cache.delete_value(cache_key)
+
+	# The S3 file URL makes this a remote file, so core does not look for it on disk and the
+	# after_insert upload skips it.
+	file_doc = frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_name": upload["file_name"],
+			"file_url": upload["file_url"],
+			"file_size": upload["file_size"],
+			"is_private": upload["is_private"],
+			"attached_to_doctype": upload["attached_to_doctype"],
+			"attached_to_name": upload["attached_to_name"],
+			"attached_to_field": upload["attached_to_field"],
+			"folder": upload["folder"],
+		}
+	).insert(ignore_permissions=upload["ignore_permissions"])
+
+	# protect_s3_fields drops the key of a new File, and core unquotes the file_url.
+	# Change file info without triggering any hooks, like file_upload_to_s3.
+	frappe.db.set_value(
+		"File",
+		file_doc.name,
+		{"file_url": upload["file_url"], "s3_object_key": upload["key"]},
+		update_modified=False,
+	)
+	file_doc.file_url = upload["file_url"]
+	file_doc.s3_object_key = upload["key"]
+	return file_doc
+
+
+def check_upload_permission(doctype, docname):
+	"""Do the permission checks of Frappe's ``upload_file``. Return whether to ignore permissions."""
+	if frappe.session.user != "Guest":
+		check_write_permission(doctype, docname)
+		return False
+
+	if not frappe.get_system_settings("allow_guests_to_upload_files"):
+		raise frappe.PermissionError
+
+	guest_allowed_docs = frappe.get_system_settings("allowed_doctypes_for_guest_uploads") or ""
+	allowed_docs = [doc.strip() for doc in guest_allowed_docs.splitlines() if doc.strip()]
+	if allowed_docs and doctype not in allowed_docs:
+		frappe.throw(
+			_("Guests are not allowed to upload files for {0} Doctype").format(doctype),
+			frappe.PermissionError,
+		)
+	return True
 
 
 @frappe.whitelist()

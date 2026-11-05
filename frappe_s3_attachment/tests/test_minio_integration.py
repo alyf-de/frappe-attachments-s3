@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import boto3
 import frappe
+import requests
 from botocore.client import BaseClient, Config
 from botocore.exceptions import ClientError
 from frappe.tests import IntegrationTestCase
@@ -466,3 +467,72 @@ class TestMinioIntegration(IntegrationTestCase):
 		self.minio_client.head_object(Bucket=public_bucket, Key=key)
 		with self.assertRaises(ClientError):
 			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
+
+	def _direct_upload(self, content, *, file_name="direct.txt", is_private=1, file_size=None):
+		"""Do the browser's part of a direct upload: start it and POST the file to S3."""
+		self.settings.allow_direct_upload = 1
+		todo = frappe.get_doc({"doctype": "ToDo", "description": "direct upload"}).insert()
+		upload = controller.upload_start(
+			file_name=file_name,
+			file_size=len(content) if file_size is None else file_size,
+			doctype="ToDo",
+			docname=todo.name,
+			is_private=is_private,
+		)
+		response = requests.post(upload["url"], data=upload["fields"], files={"file": content}, timeout=10)
+		return todo, upload["token"], response
+
+	def test_minio_direct_upload_creates_private_file(self):
+		todo, token, response = self._direct_upload(b"direct private")
+		self.assertEqual(response.status_code, 204, response.text)
+
+		file_doc = controller.upload_complete(token)
+		self.uploaded_keys.add(file_doc.s3_object_key)
+
+		file_doc = frappe.get_doc("File", file_doc.name)
+		self.assertEqual(file_doc.attached_to_doctype, "ToDo")
+		self.assertEqual(file_doc.attached_to_name, todo.name)
+		self.assertEqual(file_doc.is_private, 1)
+		self.assertEqual(file_doc.file_size, len(b"direct private"))
+		self.assertEqual(file_doc.file_url, controller.S3Operations().get_file_url(file_doc.s3_object_key, 1))
+		self.assertEqual(file_doc.get_content(), "direct private")
+		# Private objects must not be readable without a presigned URL.
+		object_url = f"{self.endpoint_url}/{self.bucket_name}/{file_doc.s3_object_key}"
+		self.assertEqual(requests.get(object_url, timeout=10).status_code, 403)
+
+		# The token works only once.
+		with self.assertRaises(frappe.PermissionError):
+			controller.upload_complete(token)
+
+	def test_minio_direct_upload_creates_public_file(self):
+		_, token, response = self._direct_upload(b"direct public", file_name="direct.png", is_private=0)
+		self.assertEqual(response.status_code, 204, response.text)
+
+		file_doc = controller.upload_complete(token)
+		key = file_doc.s3_object_key
+		self.uploaded_keys.add(key)
+
+		# MinIO ignores object ACLs, so read the object with the client.
+		self.assertEqual(file_doc.file_url, f"{self.endpoint_url}/{self.bucket_name}/{key}")
+		uploaded_object = self.minio_client.get_object(Bucket=self.bucket_name, Key=key)
+		self.assertEqual(uploaded_object["Body"].read(), b"direct public")
+		self.assertEqual(uploaded_object["ContentType"], "image/png")
+
+	def test_minio_direct_upload_rejects_other_size(self):
+		_, token, response = self._direct_upload(b"more than announced", file_size=4)
+		self.assertNotEqual(response.status_code, 204)
+
+		with self.assertRaises(frappe.ValidationError):
+			controller.upload_complete(token)
+
+	def test_minio_direct_upload_complete_before_upload_keeps_token(self):
+		self.settings.allow_direct_upload = 1
+		content = b"late upload"
+		upload = controller.upload_start(file_name="late.txt", file_size=len(content))
+		with self.assertRaises(frappe.ValidationError):
+			controller.upload_complete(upload["token"])
+
+		requests.post(upload["url"], data=upload["fields"], files={"file": content}, timeout=10)
+		file_doc = controller.upload_complete(upload["token"])
+		self.uploaded_keys.add(file_doc.s3_object_key)
+		self.assertEqual(file_doc.get_content(), "late upload")
