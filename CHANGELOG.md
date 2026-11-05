@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Proxy mode for downloads ([#48](https://github.com/alyf-de/frappe-attachments-s3/issues/48)). Set _Download Mode_ (and _Public Download Mode_ for the _Public Bucket Name_) to "Proxy" if browsers cannot reach the bucket. Frappe then streams each download from S3. Public files get a Frappe URL. A change of the mode rewrites the URLs of public files in a background job. If all buckets use proxy mode, _S3 Endpoint URL_ accepts `http://`.
+
 ### Changed
 
 - The default object key no longer contains the file name: `{folder}/{year}/{month}/{day}/{parent_doctype}/{random}{extension}`, with 32 random hex characters. Uploads no longer write the file name to the object metadata, and private `file_url` values no longer contain `file_name`. File names often contain personal data. Existing objects keep their keys, and existing URLs continue to work ([#37](https://github.com/alyf-de/frappe-attachments-s3/issues/37)).

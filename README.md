@@ -14,7 +14,8 @@ The **v16** line supports Frappe v16 (Python 3.14+). It ships custom endpoint su
 5. Files are stored under `{folder}/{year}/{month}/{day}/{doctype}/{random}{extension}` (see _Folder Name_).
 6. Optional _Public Bucket Name_: public files go to this separate, publicly readable bucket without an object ACL, while the main bucket stays private. Use it for providers without object ACLs (e.g. Backblaze B2), where a single bucket is either fully public or fully private. If empty, public files go to _Bucket Name_ with a `public-read` ACL.
 7. Exclude parent DocTypes from automatic S3 upload via the **S3 Ignored DocType Row** child table on **S3 File Attachment**; **Data Import** is listed there by default (patch **v0.2.1** backfills the row on migrate if missing; you may remove it to allow **Data Import** files on S3). **Bank Statement Import** is also listed by default if it exists, because it writes back to the file on disk (patch **v0.2.2** adds it on migrate; install ERPNext before this app, or add the row manually).
-8. When _Is Private_ changes on a **File** in S3, the object follows: with a _Public Bucket Name_, it moves to the other bucket; without one, its ACL changes between `private` and `public-read`. The _File URL_ changes accordingly.
+8. Optional proxy mode for buckets that browsers cannot reach, for example a bucket on a private network. See [Proxy mode](#proxy-mode).
+9. When _Is Private_ changes on a **File** in S3, the object follows: with a _Public Bucket Name_, it moves to the other bucket; without one, its ACL changes between `private` and `public-read`. The _File URL_ changes accordingly.
 
 #### Installation
 
@@ -111,7 +112,7 @@ When `RUN_MINIO_INTEGRATION_TESTS` is unset (or not `"1"`), these tests are skip
 #### Desk configuration
 
 1. Open the **S3 File Attachment** single.
-2. Enter _Bucket Name_, _Access Key_, _Secret Key_, _S3 Bucket Region Name_, optional _Endpoint URL_ (must be `https://` if set, except `http://` on `localhost`, `127.0.0.1` or `::1` for local development), and _Folder Name_ as needed. _Folder Name_ is the default prefix inside the bucket for generated keys.
+2. Enter _Bucket Name_, _Access Key_, _Secret Key_, _S3 Bucket Region Name_, optional _Endpoint URL_ (must be `https://` if set, except `http://` on `localhost`, `127.0.0.1` or `::1` for local development, or if all buckets use [proxy mode](#proxy-mode)), and _Folder Name_ as needed. _Folder Name_ is the default prefix inside the bucket for generated keys.
 3. Use _Migrate Existing Files_ to queue upload of local files still under `sites/<site>/public` and `private` into the bucket. Migration runs on the **long** RQ worker (`bench worker --queue long`); track progress via the linked **RQ Job**. Set _Timeout for Migration Job_ (seconds) on large sites; re-run if the job times out before all files are uploaded.
 4. _Delete file from cloud_ is enabled by default: deleting a **File** also deletes its S3 object, unless another **File** still uses it. If you turn it off, deleted files stay in the bucket, so for an erasure request (for example GDPR) you must delete the object manually.
    - The credentials need `s3:DeleteObject`. Without it, the object stays in the bucket and the error is logged.
@@ -124,6 +125,26 @@ bench --site <site> set-config -p s3_use_default_credentials 1
 ```
 
 The default credentials belong to the host, so all sites on the bench share them. Enable this only for sites that may use them.
+
+#### Proxy mode
+
+By default, browsers download files directly from S3 ("Redirect"): public files have the S3 URL, and private files redirect to a presigned URL after the permission check. S3 also serves Range requests, so video seeking works.
+
+If browsers cannot reach the bucket, set _Download Mode_ to "Proxy". Frappe then streams each download from S3:
+
+- Private files keep their URL. `generate_file` checks the permissions, then streams the file.
+- Public files get a Frappe URL, `/api/method/frappe_s3_attachment.controller.download_public_file?bucket=...&key=...`. Guests can open it.
+- _Public Download Mode_ sets the mode of the _Public Bucket Name_. If _Public Bucket Name_ is empty, public and private files use _Download Mode_.
+- If all buckets use proxy mode, _S3 Endpoint URL_ accepts `http://`, for example `http://minio:9000`.
+
+When you change a mode, a background job on the **long** queue changes the _File URL_ of the public S3 files, and the parent's image field (for example _User Image_). Other copies of the old URL stay, for example in Text Editor content, emails and print formats. Wait for the job to complete before you change the mode again.
+
+Limits of proxy mode:
+
+- Each download holds a gunicorn worker for the full transfer.
+- No Range requests. Video seeking does not work, and an interrupted download starts again from the beginning.
+- All bytes go through the Frappe server. Users far from the server's region get slower downloads than from S3 or a CDN.
+- Uploads go through Frappe in both modes, so the request size limit in front of Frappe applies.
 
 #### Custom S3 object keys (`s3_key_generator`)
 

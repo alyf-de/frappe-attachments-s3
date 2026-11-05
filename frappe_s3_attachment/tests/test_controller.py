@@ -30,6 +30,8 @@ def _make_settings(**overrides):
 		"ignored_doctypes": [],
 		"signed_url_expiry_time": 300,
 		"delete_file_from_cloud": 1,
+		"download_mode": "Redirect",
+		"public_download_mode": "Redirect",
 	}
 	merged.update({k: v for k, v in overrides.items() if k != "_secret_password"})
 	settings = frappe._dict(merged)
@@ -634,6 +636,10 @@ class TestControllerCharacterization(IntegrationTestCase):
 			("https://s3.local/public-bucket/2026/logo.png", "public-bucket"),
 			("https://s3.local/test-bucket/2026/logo.png", "test-bucket"),
 			("/api/method/frappe_s3_attachment.controller.generate_file?key=2026/logo.png", "test-bucket"),
+			(
+				"/api/method/frappe_s3_attachment.controller.download_public_file?bucket=old-bucket&key=2026%2Flogo.png",
+				"old-bucket",
+			),
 		)
 		for file_url, bucket in cases:
 			with self.subTest(file_url=file_url):
@@ -1179,6 +1185,22 @@ class TestProtectS3Fields(IntegrationTestCase):
 			self.assertEqual(copy.get_content(), "hello")
 
 		s3.S3_CLIENT.get_object.assert_called_once_with(Bucket="test-bucket", Key="R&D/2026/b+c.txt")
+
+	def test_insert_copy_of_proxied_public_file_gets_key_of_original(self):
+		key = "R&D/2026/b+c.png"
+		file_url = (
+			"/api/method/frappe_s3_attachment.controller.download_public_file?"
+			+ urllib.parse.urlencode({"bucket": "public-bucket", "key": key})
+		)
+		original = frappe.get_doc({"doctype": "File", "file_name": "b.png", "file_url": file_url}).insert()
+		frappe.db.set_value("File", original.name, {"file_url": file_url, "s3_object_key": key})
+
+		copy = frappe.get_doc({"doctype": "File", "file_name": "b.png", "file_url": file_url}).insert()
+
+		copy.reload()
+		self.assertEqual(copy.file_url, file_url)
+		self.assertEqual(copy.is_private, 0)
+		self.assertEqual(copy.s3_object_key, key)
 
 	def test_insert_copy_ignores_file_whose_url_differs_in_case(self):
 		"""MariaDB compares file_url case-insensitively, but S3 keys are case-sensitive."""

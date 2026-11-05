@@ -21,8 +21,15 @@ from frappe.utils import cint, get_files_path, get_link_to_form
 from frappe.utils.background_jobs import create_job_id, enqueue
 from frappe.utils.response import FORCE_DOWNLOAD_EXTENSIONS
 from rq.timeouts import JobTimeoutException
+from werkzeug.wrappers import Response
+from werkzeug.wsgi import FileWrapper
 
 MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
+PUBLIC_FILE_PATH = "/api/method/frappe_s3_attachment.controller.download_public_file"
+# For example text/html and image/svg+xml
+FORCE_DOWNLOAD_CONTENT_TYPES = {
+	mimetypes.guess_type(f"file{ext}")[0] for ext in FORCE_DOWNLOAD_EXTENSIONS
+} - {None}
 
 
 class S3Operations:
@@ -76,16 +83,31 @@ class S3Operations:
 		return self.BUCKET
 
 	def get_bucket_of_file(self, file_url, key):
-		"""Return the bucket of an uploaded file. Public file URLs are ``{endpoint}/{bucket}/{key}``.
+		"""Return the bucket of an uploaded file.
 
-		The bucket comes from the URL, not from the settings, so it stays correct after
+		Public file URLs are ``{endpoint}/{bucket}/{key}``, or ``PUBLIC_FILE_PATH?bucket=...&key=...``
+		in proxy mode. The bucket comes from the URL, not from the settings, so it stays correct after
 		*Public Bucket Name* changes. Private file URLs always use the main bucket.
 		"""
+		return self.get_bucket_of_public_url(file_url, key) or self.BUCKET
+
+	def get_bucket_of_public_url(self, file_url, key):
+		"""Return the bucket in a public file URL of this app, or ``None`` for other URLs."""
+		if file_url.startswith(f"{PUBLIC_FILE_PATH}?"):
+			query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(file_url).query))
+			return query["bucket"] if query.get("key") == key else None
+
 		prefix = f"{self.S3_CLIENT.meta.endpoint_url}/"
 		suffix = f"/{key}"
 		if file_url.startswith(prefix) and file_url.endswith(suffix):
 			return file_url.removeprefix(prefix).removesuffix(suffix)
-		return self.BUCKET
+		return None
+
+	def is_proxy_mode(self, bucket):
+		"""Return whether Frappe streams the downloads of ``bucket``, instead of a redirect to S3."""
+		if self.PUBLIC_BUCKET and bucket == self.PUBLIC_BUCKET:
+			return self.s3_settings_doc.public_download_mode == "Proxy"
+		return self.s3_settings_doc.download_mode == "Proxy"
 
 	def get_file_url(self, key, is_private):
 		"""Return the ``file_url`` of an uploaded file in the bucket of ``get_bucket``."""
@@ -93,7 +115,15 @@ class S3Operations:
 			generate_method = "frappe_s3_attachment.controller.generate_file"
 			query = urllib.parse.urlencode({"key": key})
 			return f"/api/method/{generate_method}?{query}"
-		return f"{self.S3_CLIENT.meta.endpoint_url}/{self.get_bucket(is_private)}/{key}"
+		return self.get_public_file_url(self.get_bucket(is_private), key)
+
+	def get_public_file_url(self, bucket, key):
+		"""Return a Frappe URL in proxy mode, because browsers cannot reach the bucket. Else the S3 URL."""
+		if self.is_proxy_mode(bucket):
+			# Key last: Desk shows image previews of public files by the URL extension.
+			query = urllib.parse.urlencode({"bucket": bucket, "key": key})
+			return f"{PUBLIC_FILE_PATH}?{query}"
+		return f"{self.S3_CLIENT.meta.endpoint_url}/{bucket}/{key}"
 
 	def is_ignored_doctype(self, parent_doctype: str) -> bool:
 		"""Return whether *Attached To DocType* ``parent_doctype`` is listed on **S3 File Attachment**."""
@@ -253,11 +283,7 @@ class S3Operations:
 			"Key": key,
 		}
 		if file_name:
-			quoted = urllib.parse.quote(file_name)
-			# Same as Frappe's send_private_file: inline so previews work, except for XSS-prone types.
-			extension = os.path.splitext(file_name)[1].lower()
-			disposition = "attachment" if extension in FORCE_DOWNLOAD_EXTENSIONS else "inline"
-			params["ResponseContentDisposition"] = f"{disposition}; filename*=UTF-8''{quoted}"
+			params["ResponseContentDisposition"] = get_content_disposition(file_name)
 
 		url = self.S3_CLIENT.generate_presigned_url(
 			"get_object",
@@ -267,10 +293,35 @@ class S3Operations:
 
 		return url
 
+	def stream_file(self, bucket, key, file_name):
+		"""Return a response that streams the object from S3 (proxy mode)."""
+		s3_object = self.S3_CLIENT.get_object(Bucket=bucket, Key=key)
+		# FileWrapper closes the S3 connection when the download ends or the browser cancels it.
+		body = FileWrapper(s3_object["Body"], 1024 * 1024)
+		content_type = s3_object["ContentType"]
+		response = Response(body, content_type=content_type, direct_passthrough=True)
+		response.headers["Content-Length"] = s3_object["ContentLength"]
+		response.headers["Content-Disposition"] = get_content_disposition(file_name, content_type)
+		response.headers["X-Content-Type-Options"] = "nosniff"
+		return response
+
+
+def get_content_disposition(file_name, content_type=None):
+	"""Same as Frappe's send_private_file: inline so previews work, except for XSS-prone types.
+
+	Check the content type too: a copy of a File can have another name than the object's type.
+	"""
+	quoted = urllib.parse.quote(file_name)
+	extension = os.path.splitext(file_name)[1].lower()
+	force_download = extension in FORCE_DOWNLOAD_EXTENSIONS or content_type in FORCE_DOWNLOAD_CONTENT_TYPES
+	disposition = "attachment" if force_download else "inline"
+	return f"{disposition}; filename*=UTF-8''{quoted}"
+
 
 class S3File(File):
 	def before_insert(self):
-		"""Give a new copy of a private S3 file the encoded URL of its original, if the user can read the original.
+		"""Give a new copy of an S3 file the encoded URL of its original. For a private original, only
+		if the user can read it.
 
 		Core unquotes ``file_url`` here, so the copy no longer matches the original: core's access check
 		finds no private file to check, and ``protect_s3_fields`` finds no key for the copy. Core also makes
@@ -279,12 +330,17 @@ class S3File(File):
 		encoded_file_url = self.file_url
 		super().before_insert()
 
-		if encoded_file_url and frappe.db.exists(
-			"File", {"file_url": encoded_file_url, "s3_object_key": ("is", "set"), "is_private": 1}
-		):
+		if not encoded_file_url:
+			return
+
+		originals = {"file_url": encoded_file_url, "s3_object_key": ("is", "set")}
+		if frappe.db.exists("File", {**originals, "is_private": 1}):
 			self.file_url = encoded_file_url
 			self.is_private = 1
 			self.validate_private_file_access()
+		elif frappe.db.exists("File", originals):
+			# A public file in proxy mode
+			self.file_url = encoded_file_url
 
 	def get_content(self) -> bytes | str:
 		"""Read the content of S3 files from S3. Core opens ``file_url`` as a local path, which fails for S3 URLs."""
@@ -417,14 +473,40 @@ def generate_file(key: str | None = None, file_name: str | None = None):
 		raise frappe.PermissionError
 
 	s3_upload = S3Operations()
+	file_type = os.path.splitext(file_doc.file_name)[1][1:]
+	make_access_log(doctype="File", document=file_doc.name, file_type=file_type)
 	# Use the name of the oldest File, which uploaded the object. Not the request's or a copy's, so
 	# callers cannot turn an SVG into an inline "PDF".
+	if s3_upload.is_proxy_mode(s3_upload.BUCKET):
+		return s3_upload.stream_file(s3_upload.BUCKET, key, files[0].file_name)
+
 	signed_url = s3_upload.get_url(key, files[0].file_name)
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = signed_url
-	file_type = os.path.splitext(file_doc.file_name)[1][1:]
-	make_access_log(doctype="File", document=file_doc.name, file_type=file_type)
 	return
+
+
+@frappe.whitelist(allow_guest=True, methods=["GET"])
+def download_public_file(bucket: str, key: str):
+	"""Stream a public file from S3. Public files get this URL in proxy mode."""
+	s3 = S3Operations()
+	files = frappe.get_all(
+		"File",
+		filters={"s3_object_key": key, "is_private": 0},
+		fields=["file_name", "file_url", "s3_object_key"],
+		order_by="creation asc",
+	)
+	# Only objects of public Files in the bucket of their URL. Else guests could read private files.
+	# MariaDB matches keys case-insensitively, but S3 keys are case-sensitive.
+	files = [
+		file
+		for file in files
+		if file.s3_object_key == key and s3.get_bucket_of_public_url(file.file_url, key) == bucket
+	]
+	if not files:
+		raise frappe.PermissionError
+
+	return s3.stream_file(bucket, key, files[0].file_name)
 
 
 def _s3_file_regex_match(file_url):
@@ -514,6 +596,56 @@ def migrate_existing_files():
 		queued = False
 
 	return {"job_id": job_id, "queued": queued}
+
+
+def rewrite_public_file_urls():
+	"""Give public S3 files the URL of the download mode of their bucket (background job).
+
+	Also changes the parent's ``image_field``. Other copies of the old URL, for example in Text Editor
+	content, emails and print formats, stay.
+	"""
+	s3 = S3Operations()
+	files = frappe.get_all(
+		"File",
+		filters={"is_private": 0, "s3_object_key": ("is", "set")},
+		fields=["name"],
+	)
+	for file in files:
+		rewrite_public_file_url(s3, file.name)
+		# Keep the progress of each file, and do not lock all rows until the end.
+		frappe.db.commit()
+
+
+def rewrite_public_file_url(s3, file_name):
+	# Lock and read the row again: a user can move the file or make it private while the job runs.
+	file = frappe.db.get_value(
+		"File",
+		file_name,
+		["file_url", "is_private", "s3_object_key", "attached_to_doctype", "attached_to_name"],
+		as_dict=True,
+		for_update=True,
+	)
+	if not file or file.is_private or not file.s3_object_key:
+		return
+
+	bucket = s3.get_bucket_of_public_url(file.file_url, file.s3_object_key)
+	if not bucket:
+		# For example, the URL of an old endpoint. Its bucket is unknown.
+		return
+
+	new_file_url = s3.get_public_file_url(bucket, file.s3_object_key)
+	if new_file_url == file.file_url:
+		return
+
+	# Change file info without triggering any hooks, like file_upload_to_s3
+	frappe.db.set_value("File", file_name, "file_url", new_file_url, update_modified=False)
+	if file.attached_to_doctype and file.attached_to_name:
+		image_field = frappe.get_meta(file.attached_to_doctype).get("image_field")
+		parent_image = image_field and frappe.db.get_value(
+			file.attached_to_doctype, file.attached_to_name, image_field
+		)
+		if parent_image == file.file_url:
+			frappe.db.set_value(file.attached_to_doctype, file.attached_to_name, image_field, new_file_url)
 
 
 def protect_s3_fields(doc, method):

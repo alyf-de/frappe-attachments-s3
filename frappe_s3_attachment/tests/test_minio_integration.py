@@ -94,6 +94,8 @@ class TestMinioIntegration(IntegrationTestCase):
 				"ignored_doctypes": [],
 				"signed_url_expiry_time": 300,
 				"delete_file_from_cloud": delete_file_from_cloud,
+				"download_mode": "Redirect",
+				"public_download_mode": "Redirect",
 			}
 		)
 
@@ -466,3 +468,123 @@ class TestMinioIntegration(IntegrationTestCase):
 		self.minio_client.head_object(Bucket=public_bucket, Key=key)
 		with self.assertRaises(ClientError):
 			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
+
+	def _upload(self, file_name, content, is_private):
+		file_doc = self._create_file_doc(file_name=file_name, content=content, is_private=is_private)
+		controller.file_upload_to_s3(file_doc, "after_insert")
+		file_doc.reload()
+		self.uploaded_keys.add(file_doc.s3_object_key)
+		return file_doc
+
+	def test_minio_proxy_mode_streams_private_file(self):
+		self.settings.download_mode = "Proxy"
+		file_doc = self._upload("minio-proxy-private.txt", "streamed", is_private=1)
+
+		frappe.local.response = frappe._dict()
+		response = controller.generate_file(key=file_doc.s3_object_key)
+
+		self.assertEqual(b"".join(response.response), b"streamed")
+		self.assertEqual(response.headers["Content-Length"], "8")
+		self.assertEqual(response.content_type, "text/plain")
+		self.assertEqual(
+			response.headers["Content-Disposition"], "inline; filename*=UTF-8''minio-proxy-private.txt"
+		)
+		self.assertNotEqual(frappe.local.response.get("type"), "redirect")
+
+	def test_minio_proxy_mode_gives_public_file_a_frappe_url(self):
+		public_bucket = self._use_public_bucket()
+		self.settings.public_download_mode = "Proxy"
+		self.settings.delete_file_from_cloud = 1
+		file_doc = self._upload("minio-proxy-public.html", "<p>public</p>", is_private=0)
+		key = file_doc.s3_object_key
+
+		parsed_url = urllib.parse.urlparse(file_doc.file_url)
+		self.assertEqual(parsed_url.path, "/api/method/frappe_s3_attachment.controller.download_public_file")
+		query = dict(urllib.parse.parse_qsl(parsed_url.query))
+		self.assertEqual(query, {"bucket": public_bucket, "key": key})
+
+		frappe.set_user("Guest")
+		self.addCleanup(frappe.set_user, "Administrator")
+		response = controller.download_public_file(**query)
+		self.assertEqual(b"".join(response.response), b"<p>public</p>")
+		# Served from the site's origin, so HTML must not render inline.
+		self.assertTrue(response.headers["Content-Disposition"].startswith("attachment;"))
+		frappe.set_user("Administrator")
+
+		# The bucket in the URL is still found, e.g. to delete the object.
+		frappe.delete_doc("File", file_doc.name)
+		frappe.db.commit()
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=public_bucket, Key=key)
+
+	def test_minio_download_public_file_does_not_serve_private_files(self):
+		self._use_public_bucket()
+		self.settings.public_download_mode = "Proxy"
+		private_doc = self._upload("minio-proxy-secret.txt", "secret", is_private=1)
+		key = private_doc.s3_object_key
+
+		frappe.set_user("Guest")
+		self.addCleanup(frappe.set_user, "Administrator")
+		with self.assertRaises(frappe.PermissionError):
+			controller.download_public_file(bucket=self.bucket_name, key=key)
+
+	def test_minio_mode_change_rewrites_public_file_urls(self):
+		file_doc = self._upload("minio-mode-change.png", "image", is_private=0)
+		direct_url = file_doc.file_url
+		self.assertEqual(direct_url, f"{self.endpoint_url}/{self.bucket_name}/{file_doc.s3_object_key}")
+		old_image = frappe.db.get_value("User", "Administrator", "user_image")
+		frappe.db.set_value("User", "Administrator", "user_image", direct_url)
+		file_doc.db_set({"attached_to_doctype": "User", "attached_to_name": "Administrator"})
+		self.addCleanup(frappe.db.commit)
+		self.addCleanup(frappe.db.set_value, "User", "Administrator", "user_image", old_image)
+
+		self.settings.download_mode = "Proxy"
+		controller.rewrite_public_file_urls()
+
+		file_doc.reload()
+		self.assertIn("controller.download_public_file?", file_doc.file_url)
+		self.assertEqual(frappe.db.get_value("User", "Administrator", "user_image"), file_doc.file_url)
+
+		self.settings.download_mode = "Redirect"
+		controller.rewrite_public_file_urls()
+
+		file_doc.reload()
+		self.assertEqual(file_doc.file_url, direct_url)
+		self.assertEqual(frappe.db.get_value("User", "Administrator", "user_image"), direct_url)
+
+	def test_minio_proxy_mode_downloads_html_copy_with_other_name(self):
+		"""The content type of the object decides, not only the name of the oldest remaining File."""
+		public_bucket = self._use_public_bucket()
+		self.settings.public_download_mode = "Proxy"
+		self.settings.delete_file_from_cloud = 1
+		original = self._upload("minio-proxy-active.html", "<script>alert(1)</script>", is_private=0)
+		copy = frappe.get_doc(
+			{"doctype": "File", "file_name": "minio-proxy-preview.txt", "file_url": original.file_url}
+		).insert()
+		self.addCleanup(frappe.delete_doc, "File", copy.name, force=True)
+		frappe.delete_doc("File", original.name)
+
+		response = controller.download_public_file(bucket=public_bucket, key=original.s3_object_key)
+
+		self.assertEqual(response.content_type, "text/html")
+		self.assertTrue(response.headers["Content-Disposition"].startswith("attachment;"))
+
+	def test_minio_mode_change_skips_file_moved_to_local_during_rewrite(self):
+		file_doc = self._upload("minio-moved-during-rewrite.png", "image", is_private=0)
+		listed_files = frappe.get_all(
+			"File",
+			filters={"name": file_doc.name},
+			fields=["name", "file_url", "s3_object_key", "attached_to_doctype", "attached_to_name"],
+		)
+		with patch("frappe_s3_attachment.controller.frappe.publish_progress"):
+			controller.run_move_file(file_doc.name, to_s3=False)
+		self.uploaded_keys.discard(file_doc.s3_object_key)
+		file_doc.reload()
+		local_url = file_doc.file_url
+
+		self.settings.download_mode = "Proxy"
+		# The file moves to local storage after the job lists it.
+		with patch("frappe_s3_attachment.controller.frappe.get_all", return_value=listed_files):
+			controller.rewrite_public_file_urls()
+
+		self.assertEqual(frappe.db.get_value("File", file_doc.name, "file_url"), local_url)
