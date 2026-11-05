@@ -551,3 +551,20 @@ class TestMinioIntegration(IntegrationTestCase):
 		file_doc.reload()
 		self.assertEqual(file_doc.file_url, direct_url)
 		self.assertEqual(frappe.db.get_value("User", "Administrator", "user_image"), direct_url)
+
+	def test_minio_proxy_mode_downloads_html_copy_with_other_name(self):
+		"""The content type of the object decides, not only the name of the oldest remaining File."""
+		public_bucket = self._use_public_bucket()
+		self.settings.public_download_mode = "Proxy"
+		self.settings.delete_file_from_cloud = 1
+		original = self._upload("minio-proxy-active.html", "<script>alert(1)</script>", is_private=0)
+		copy = frappe.get_doc(
+			{"doctype": "File", "file_name": "minio-proxy-preview.txt", "file_url": original.file_url}
+		).insert()
+		self.addCleanup(frappe.delete_doc, "File", copy.name, force=True)
+		frappe.delete_doc("File", original.name)
+
+		response = controller.download_public_file(bucket=public_bucket, key=original.s3_object_key)
+
+		self.assertEqual(response.content_type, "text/html")
+		self.assertTrue(response.headers["Content-Disposition"].startswith("attachment;"))

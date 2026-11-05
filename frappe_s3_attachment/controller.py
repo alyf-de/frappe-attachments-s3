@@ -26,6 +26,10 @@ from werkzeug.wsgi import FileWrapper
 
 MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
 PUBLIC_FILE_PATH = "/api/method/frappe_s3_attachment.controller.download_public_file"
+# For example text/html and image/svg+xml
+FORCE_DOWNLOAD_CONTENT_TYPES = {
+	mimetypes.guess_type(f"file{ext}")[0] for ext in FORCE_DOWNLOAD_EXTENSIONS
+} - {None}
 
 
 class S3Operations:
@@ -294,18 +298,23 @@ class S3Operations:
 		s3_object = self.S3_CLIENT.get_object(Bucket=bucket, Key=key)
 		# FileWrapper closes the S3 connection when the download ends or the browser cancels it.
 		body = FileWrapper(s3_object["Body"], 1024 * 1024)
-		response = Response(body, content_type=s3_object["ContentType"], direct_passthrough=True)
+		content_type = s3_object["ContentType"]
+		response = Response(body, content_type=content_type, direct_passthrough=True)
 		response.headers["Content-Length"] = s3_object["ContentLength"]
-		response.headers["Content-Disposition"] = get_content_disposition(file_name)
+		response.headers["Content-Disposition"] = get_content_disposition(file_name, content_type)
 		response.headers["X-Content-Type-Options"] = "nosniff"
 		return response
 
 
-def get_content_disposition(file_name):
-	"""Same as Frappe's send_private_file: inline so previews work, except for XSS-prone types."""
+def get_content_disposition(file_name, content_type=None):
+	"""Same as Frappe's send_private_file: inline so previews work, except for XSS-prone types.
+
+	Check the content type too: a copy of a File can have another name than the object's type.
+	"""
 	quoted = urllib.parse.quote(file_name)
 	extension = os.path.splitext(file_name)[1].lower()
-	disposition = "attachment" if extension in FORCE_DOWNLOAD_EXTENSIONS else "inline"
+	force_download = extension in FORCE_DOWNLOAD_EXTENSIONS or content_type in FORCE_DOWNLOAD_CONTENT_TYPES
+	disposition = "attachment" if force_download else "inline"
 	return f"{disposition}; filename*=UTF-8''{quoted}"
 
 
