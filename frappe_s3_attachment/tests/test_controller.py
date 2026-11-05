@@ -1663,18 +1663,20 @@ class TestDirectUpload(IntegrationTestCase):
 			controller.upload_start(file_name="a.png", file_size=1, is_private=0)
 		self.mock_s3_client.generate_presigned_post.assert_not_called()
 
-	def test_upload_start_policy_enforces_size_content_type_and_acl(self):
+	def test_upload_start_policy_enforces_size_and_content_type(self):
 		controller.upload_start(file_name="a.png", file_size=42, is_private=0)
 
 		policy = self._policy()
-		self.assertEqual(policy["Fields"], {"Content-Type": "image/png", "acl": "public-read"})
+		# The temporary object stays private, also for a public file.
+		self.assertEqual(policy["Fields"], {"Content-Type": "image/png"})
 		self.assertIn(["content-length-range", 42, 42], policy["Conditions"])
-		self.assertIn({"acl": "public-read"}, policy["Conditions"])
 		self.assertIn({"Content-Type": "image/png"}, policy["Conditions"])
 
-	def test_upload_start_private_file_has_no_acl(self):
-		controller.upload_start(file_name="a.png", file_size=42)
-		self.assertNotIn("acl", self._policy()["Fields"])
+	def test_upload_complete_makes_public_file_public(self):
+		token = controller.upload_start(file_name="a.png", file_size=3, is_private=0)["token"]
+		self.mock_s3_client.head_object.return_value = {"ContentLength": 3}
+		controller.upload_complete(token)
+		self.assertEqual(self.mock_s3_client.copy.call_args.kwargs["ExtraArgs"], {"ACL": "public-read"})
 
 	def test_upload_complete_rejects_token_of_other_user(self):
 		token = controller.upload_start(file_name="a.txt", file_size=1)["token"]
@@ -1693,8 +1695,13 @@ class TestDirectUpload(IntegrationTestCase):
 
 		file_doc = controller.upload_complete(token)
 
-		key = self.mock_s3_client.generate_presigned_post.call_args.args[1]
-		self.mock_s3_client.head_object.assert_called_once_with(Bucket="test-bucket", Key=key)
+		upload_key = self.mock_s3_client.generate_presigned_post.call_args.args[1]
+		key = upload_key.removesuffix(".upload")
+		self.mock_s3_client.head_object.assert_called_once_with(Bucket="test-bucket", Key=upload_key)
+		self.mock_s3_client.copy.assert_called_once_with(
+			{"Bucket": "test-bucket", "Key": upload_key}, "test-bucket", key, ExtraArgs={}
+		)
+		self.mock_s3_client.delete_object.assert_called_once_with(Bucket="test-bucket", Key=upload_key)
 		row = frappe.db.get_value(
 			"File",
 			file_doc.name,

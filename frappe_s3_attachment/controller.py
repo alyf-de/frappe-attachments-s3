@@ -816,14 +816,18 @@ def upload_start(
 		frappe.throw(_("You can only upload JPG, PNG, GIF, PDF, TXT, CSV or Microsoft documents."))
 
 	key = s3.key_generator(file_name, parent_doctype, docname)
+	# The POST stays valid after completion. It writes to a temporary (private) object, so a replay
+	# cannot change the object of the File, for example make it public again.
+	upload_key = f"{key}.upload"
 	fields = {"Content-Type": content_type or "application/octet-stream"}
-	# Same ACL as upload_files_to_s3_with_key
-	if not is_private and not s3.PUBLIC_BUCKET:
-		fields["acl"] = "public-read"
 	conditions = [{name: value} for name, value in fields.items()]
 	conditions.append(["content-length-range", file_size, file_size])
 	presigned_post = s3.S3_CLIENT.generate_presigned_post(
-		s3.get_bucket(is_private), key, Fields=fields, Conditions=conditions, ExpiresIn=DIRECT_UPLOAD_EXPIRY
+		s3.get_bucket(is_private),
+		upload_key,
+		Fields=fields,
+		Conditions=conditions,
+		ExpiresIn=DIRECT_UPLOAD_EXPIRY,
 	)
 
 	token = secrets.token_urlsafe(32)
@@ -831,6 +835,7 @@ def upload_start(
 		"user": user,
 		"ignore_permissions": ignore_permissions,
 		"key": key,
+		"upload_key": upload_key,
 		"bucket": s3.get_bucket(is_private),
 		"file_url": s3.get_file_url(key, is_private),
 		"file_size": file_size,
@@ -861,7 +866,7 @@ def upload_complete(token: str):
 
 	s3 = S3Operations()
 	try:
-		uploaded_object = s3.S3_CLIENT.head_object(Bucket=upload["bucket"], Key=upload["key"])
+		uploaded_object = s3.S3_CLIENT.head_object(Bucket=upload["bucket"], Key=upload["upload_key"])
 	except ClientError:
 		frappe.throw(_("The file is not in S3 yet. Upload it first."))
 	if uploaded_object["ContentLength"] != upload["file_size"]:
@@ -869,6 +874,14 @@ def upload_complete(token: str):
 
 	# Delete the token only now, so the browser can try again if it was too early.
 	frappe.cache.delete_value(cache_key)
+
+	# The copy keeps content type and metadata. Same ACL as upload_files_to_s3_with_key.
+	copy_args = {}
+	if not upload["is_private"] and not s3.PUBLIC_BUCKET:
+		copy_args["ACL"] = "public-read"
+	upload_object = {"Bucket": upload["bucket"], "Key": upload["upload_key"]}
+	s3.S3_CLIENT.copy(upload_object, upload["bucket"], upload["key"], ExtraArgs=copy_args)
+	s3.S3_CLIENT.delete_object(**upload_object)
 
 	# The S3 file URL makes this a remote file, so core does not look for it on disk and the
 	# after_insert upload skips it.

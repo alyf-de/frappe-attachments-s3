@@ -1,5 +1,6 @@
 import os
 import urllib.parse
+from functools import partial
 from unittest import SkipTest
 from unittest.mock import patch
 
@@ -480,6 +481,7 @@ class TestMinioIntegration(IntegrationTestCase):
 			is_private=is_private,
 		)
 		response = requests.post(upload["url"], data=upload["fields"], files={"file": content}, timeout=10)
+		self.replay_upload = partial(requests.post, upload["url"], data=upload["fields"], timeout=10)
 		return todo, upload["token"], response
 
 	def test_minio_direct_upload_creates_private_file(self):
@@ -517,6 +519,17 @@ class TestMinioIntegration(IntegrationTestCase):
 		uploaded_object = self.minio_client.get_object(Bucket=self.bucket_name, Key=key)
 		self.assertEqual(uploaded_object["Body"].read(), b"direct public")
 		self.assertEqual(uploaded_object["ContentType"], "image/png")
+
+	def test_minio_direct_upload_replay_does_not_change_file(self):
+		_, token, _ = self._direct_upload(b"original")
+		file_doc = controller.upload_complete(token)
+		self.uploaded_keys.add(file_doc.s3_object_key)
+		self.uploaded_keys.add(f"{file_doc.s3_object_key}.upload")
+
+		# The POST is still valid, but writes only to the temporary object.
+		response = self.replay_upload(files={"file": b"replaced"})
+		self.assertEqual(response.status_code, 204, response.text)
+		self.assertEqual(frappe.get_doc("File", file_doc.name).get_content(), "original")
 
 	def test_minio_direct_upload_rejects_other_size(self):
 		_, token, response = self._direct_upload(b"more than announced", file_size=4)

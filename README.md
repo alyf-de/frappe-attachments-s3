@@ -24,9 +24,9 @@ Files that are larger than the request size limit in front of Frappe cannot go t
 const file_doc = await frappe_s3_attachment.upload(file, { doctype: "ToDo", docname: "abc123", is_private: 1 });
 ```
 
-1. `upload_start` does the checks of `upload_file` (write permission on the document, guest uploads, _Allowed File Extensions_, _Max File Size_ in **System Settings**) and returns a presigned POST for one new object key. The POST is valid for one hour and accepts only the announced size and content type.
+1. `upload_start` does the checks of `upload_file` (write permission on the document, guest uploads, _Allowed File Extensions_, _Max File Size_ in **System Settings**) and returns a presigned POST for one new, temporary object key. The POST is valid for one hour and accepts only the announced size and content type.
 2. The browser uploads the file to S3.
-3. `upload_complete` takes only the token from step 1, checks that the object exists, and creates the **File**.
+3. `upload_complete` takes only the token from step 1, checks that the object exists, copies it to its permanent key, and creates the **File**. A replay of the POST writes only to the temporary key, so it cannot change the file.
 
 The attach dialog in Desk does not use this. Call the helper from your own buttons or pages.
 
