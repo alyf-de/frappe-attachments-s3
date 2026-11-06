@@ -1696,7 +1696,9 @@ class TestDirectUpload(IntegrationTestCase):
 		file_doc = controller.upload_complete(token)
 
 		upload_key = self.mock_s3_client.generate_presigned_post.call_args.args[1]
-		key = upload_key.removesuffix(".upload")
+		key = file_doc.s3_object_key
+		self.assertTrue(upload_key.startswith(controller.DIRECT_UPLOAD_KEY_PREFIX))
+		self.assertNotIn(key, upload_key)
 		self.mock_s3_client.head_object.assert_called_once_with(Bucket="test-bucket", Key=upload_key)
 		self.mock_s3_client.copy.assert_called_once_with(
 			{"Bucket": "test-bucket", "Key": upload_key}, "test-bucket", key, ExtraArgs={}

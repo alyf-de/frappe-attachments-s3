@@ -28,6 +28,7 @@ MIGRATE_EXISTING_FILES_JOB_ID = "frappe_s3_attachment.migrate_existing_files"
 DIRECT_UPLOAD_CACHE_PREFIX = "frappe_s3_attachment:direct_upload:"
 # shortcut: fixed one-hour limit to upload a file directly; make it a setting if that fails
 DIRECT_UPLOAD_EXPIRY = 3600
+DIRECT_UPLOAD_KEY_PREFIX = "direct-upload/"
 
 
 class S3Operations:
@@ -817,8 +818,9 @@ def upload_start(
 
 	key = s3.key_generator(file_name, parent_doctype, docname)
 	# The POST stays valid after completion. It writes to a temporary (private) object, so a replay
-	# cannot change the object of the File, for example make it public again.
-	upload_key = f"{key}.upload"
+	# cannot change the object of the File, for example make it public again. The random key cannot
+	# overlap a permanent key, also not one from a custom s3_key_generator.
+	upload_key = f"{DIRECT_UPLOAD_KEY_PREFIX}{secrets.token_hex(16)}"
 	fields = {"Content-Type": content_type or "application/octet-stream"}
 	conditions = [{name: value} for name, value in fields.items()]
 	conditions.append(["content-length-range", file_size, file_size])

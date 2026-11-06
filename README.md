@@ -31,7 +31,7 @@ const file_doc = await frappe_s3_attachment.upload(file, { doctype: "ToDo", docn
 The attach dialog in Desk does not use this. Call the helper from your own buttons or pages.
 
 - The bucket needs a CORS rule that allows `POST` from the site's origin.
-- Objects of uploads that do not complete stay in the bucket. Add a lifecycle rule if you need to remove them.
+- Objects of uploads that do not complete stay in the bucket under `direct-upload/`. Add a lifecycle rule for this prefix if you need to remove them.
 - Direct uploads are not optimized (for example image resizing).
 
 #### Installation

@@ -481,6 +481,7 @@ class TestMinioIntegration(IntegrationTestCase):
 			is_private=is_private,
 		)
 		response = requests.post(upload["url"], data=upload["fields"], files={"file": content}, timeout=10)
+		self.uploaded_keys.add(upload["fields"]["key"])
 		self.replay_upload = partial(requests.post, upload["url"], data=upload["fields"], timeout=10)
 		return todo, upload["token"], response
 
@@ -524,7 +525,6 @@ class TestMinioIntegration(IntegrationTestCase):
 		_, token, _ = self._direct_upload(b"original")
 		file_doc = controller.upload_complete(token)
 		self.uploaded_keys.add(file_doc.s3_object_key)
-		self.uploaded_keys.add(f"{file_doc.s3_object_key}.upload")
 
 		# The POST is still valid, but writes only to the temporary object.
 		response = self.replay_upload(files={"file": b"replaced"})
