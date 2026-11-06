@@ -1714,3 +1714,16 @@ class TestDirectUpload(IntegrationTestCase):
 		self.assertEqual(row.file_url, controller.S3Operations().get_file_url(key, 1))
 		self.assertEqual(row.attached_to_name, todo.name)
 		self.assertEqual(row.is_private, 1)
+
+	def test_upload_complete_logs_failed_delete_of_temporary_object(self):
+		token = controller.upload_start(file_name="a.txt", file_size=3)["token"]
+		self.mock_s3_client.head_object.return_value = {"ContentLength": 3}
+		self.mock_s3_client.delete_object.side_effect = ClientError(
+			{"Error": {"Code": "AccessDenied"}}, "DeleteObject"
+		)
+
+		with patch("frappe_s3_attachment.controller.frappe.log_error") as log_error:
+			file_doc = controller.upload_complete(token)
+
+		self.assertTrue(frappe.db.exists("File", file_doc.name))
+		log_error.assert_called_once()

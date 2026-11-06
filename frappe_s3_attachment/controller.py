@@ -883,7 +883,11 @@ def upload_complete(token: str):
 		copy_args["ACL"] = "public-read"
 	upload_object = {"Bucket": upload["bucket"], "Key": upload["upload_key"]}
 	s3.S3_CLIENT.copy(upload_object, upload["bucket"], upload["key"], ExtraArgs=copy_args)
-	s3.S3_CLIENT.delete_object(**upload_object)
+	try:
+		s3.S3_CLIENT.delete_object(**upload_object)
+	except ClientError:
+		# The temporary object only uses storage; do not let it block the upload.
+		frappe.log_error(title=_("Could not delete S3 object {0}").format(upload_object["Key"]))
 
 	# The S3 file URL makes this a remote file, so core does not look for it on disk and the
 	# after_insert upload skips it.
