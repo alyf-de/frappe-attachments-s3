@@ -883,6 +883,22 @@ def upload_complete(token: str):
 		copy_args["ACL"] = "public-read"
 	upload_object = {"Bucket": upload["bucket"], "Key": upload["upload_key"]}
 	s3.S3_CLIENT.copy(upload_object, upload["bucket"], upload["key"], ExtraArgs=copy_args)
+
+	def undo_copy():
+		# A custom s3_key_generator can give the same key to another File. Same as undo_upload.
+		other_file_urls = frappe.get_all("File", filters={"s3_object_key": upload["key"]}, pluck="file_url")
+		other_buckets = {s3.get_bucket_of_file(url, upload["key"]) for url in other_file_urls}
+		if upload["bucket"] not in other_buckets:
+			try:
+				s3.S3_CLIENT.delete_object(Bucket=upload["bucket"], Key=upload["key"])
+			except Exception:
+				# An error here stops the other rollback callbacks. The object left behind only uses storage.
+				frappe.log_error(
+					title=_("Could not delete S3 object {0}").format(upload["key"]), defer_insert=True
+				)
+
+	# Register before the next steps, so that a failure in them also deletes the permanent object.
+	frappe.db.after_rollback.add(undo_copy)
 	try:
 		s3.S3_CLIENT.delete_object(**upload_object)
 	except ClientError:

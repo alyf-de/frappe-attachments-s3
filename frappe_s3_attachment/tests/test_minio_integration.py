@@ -469,7 +469,7 @@ class TestMinioIntegration(IntegrationTestCase):
 		with self.assertRaises(ClientError):
 			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
 
-	def _direct_upload(self, content, *, file_name="direct.txt", is_private=1, file_size=None):
+	def _direct_upload(self, content, *, file_name="direct.txt", is_private=1, file_size=None, folder=None):
 		"""Do the browser's part of a direct upload: start it and POST the file to S3."""
 		self.settings.allow_direct_upload = 1
 		todo = frappe.get_doc({"doctype": "ToDo", "description": "direct upload"}).insert()
@@ -478,6 +478,7 @@ class TestMinioIntegration(IntegrationTestCase):
 			file_size=len(content) if file_size is None else file_size,
 			doctype="ToDo",
 			docname=todo.name,
+			folder=folder,
 			is_private=is_private,
 		)
 		response = requests.post(upload["url"], data=upload["fields"], files={"file": content}, timeout=10)
@@ -530,6 +531,30 @@ class TestMinioIntegration(IntegrationTestCase):
 		response = self.replay_upload(files={"file": b"replaced"})
 		self.assertEqual(response.status_code, 204, response.text)
 		self.assertEqual(frappe.get_doc("File", file_doc.name).get_content(), "original")
+
+	def test_minio_direct_upload_failed_insert_deletes_object(self):
+		_, token, _ = self._direct_upload(b"no file", is_private=0, folder="Home/does-not-exist")
+		key = frappe.cache.get_value(controller.DIRECT_UPLOAD_CACHE_PREFIX + token)["key"]
+		self.uploaded_keys.add(key)
+
+		with self.assertRaises(frappe.LinkValidationError):
+			controller.upload_complete(token)
+		frappe.db.rollback()
+
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
+
+	def test_minio_direct_upload_rollback_deletes_object(self):
+		_, token, _ = self._direct_upload(b"rolled back")
+		file_doc = controller.upload_complete(token)
+		key = file_doc.s3_object_key
+		self._assert_object_exists(key)
+
+		frappe.db.rollback()
+
+		self.assertFalse(frappe.db.exists("File", file_doc.name))
+		with self.assertRaises(ClientError):
+			self.minio_client.head_object(Bucket=self.bucket_name, Key=key)
 
 	def test_minio_direct_upload_rejects_other_size(self):
 		_, token, response = self._direct_upload(b"more than announced", file_size=4)
