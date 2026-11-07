@@ -1593,3 +1593,137 @@ class TestUploadTransaction(IntegrationTestCase):
 			frappe.db.rollback()
 
 		s3.S3_CLIENT.delete_object.assert_not_called()
+
+
+class TestDirectUpload(IntegrationTestCase):
+	def setUp(self):
+		super().setUp()
+		self.settings = _make_settings(allow_direct_upload=1)
+		self.mock_s3_client = MagicMock()
+		self.mock_s3_client.meta.endpoint_url = "https://s3.local"
+		self.mock_s3_client.generate_presigned_post.return_value = {"url": "https://s3.local/b", "fields": {}}
+		for target, kwargs in (
+			("frappe_s3_attachment.controller.boto3.client", {"return_value": self.mock_s3_client}),
+			("frappe_s3_attachment.controller.frappe.get_doc", {"side_effect": self._selective_get_doc}),
+		):
+			patcher = patch(target, **kwargs)
+			patcher.start()
+			self.addCleanup(patcher.stop)
+		self.addCleanup(frappe.set_user, "Administrator")
+
+	def _selective_get_doc(self, *args, **kwargs):
+		if args and args[0] == "S3 File Attachment":
+			return self.settings
+		return _REAL_FRAPPE_GET_DOC(*args, **kwargs)
+
+	def _patch_system_settings(self, **values):
+		# change_settings would save System Settings, which fails on a site without the setup wizard.
+		patcher = patch("frappe.get_system_settings", side_effect=values.get)
+		patcher.start()
+		self.addCleanup(patcher.stop)
+
+	def _policy(self):
+		return self.mock_s3_client.generate_presigned_post.call_args.kwargs
+
+	def test_upload_start_rejects_when_not_allowed(self):
+		self.settings.allow_direct_upload = 0
+		with self.assertRaises(frappe.PermissionError):
+			controller.upload_start(file_name="a.txt", file_size=1)
+
+	def test_upload_start_checks_write_permission_on_target(self):
+		_ensure_perm_test_user()
+		frappe.set_user(_PERM_TEST_USER)
+		with self.assertRaises(frappe.PermissionError):
+			controller.upload_start(file_name="a.txt", file_size=1, doctype="Role", docname="System Manager")
+		self.mock_s3_client.generate_presigned_post.assert_not_called()
+
+	def test_upload_start_rejects_guest(self):
+		self._patch_system_settings(allow_guests_to_upload_files=0)
+		frappe.set_user("Guest")
+		with self.assertRaises(frappe.PermissionError):
+			controller.upload_start(file_name="a.txt", file_size=1)
+
+	def test_upload_start_rejects_file_above_max_file_size(self):
+		self._patch_system_settings(max_file_size=1)
+		with self.assertRaises(controller.MaxFileSizeReachedError):
+			controller.upload_start(file_name="a.txt", file_size=1024 * 1024 + 1)
+
+	def test_upload_start_rejects_file_extension(self):
+		self._patch_system_settings(allowed_file_extensions="PDF")
+		# Core checks the extension only in requests.
+		with patch.object(frappe.local, "request", MagicMock(), create=True):
+			with self.assertRaises(frappe.ValidationError):
+				controller.upload_start(file_name="a.txt", file_size=1)
+
+	def test_upload_start_rejects_public_file_of_non_system_manager(self):
+		self._patch_system_settings(only_allow_system_managers_to_upload_public_files=1)
+		_ensure_perm_test_user()
+		frappe.set_user(_PERM_TEST_USER)
+		with self.assertRaises(frappe.PermissionError):
+			controller.upload_start(file_name="a.png", file_size=1, is_private=0)
+		self.mock_s3_client.generate_presigned_post.assert_not_called()
+
+	def test_upload_start_policy_enforces_size_and_content_type(self):
+		controller.upload_start(file_name="a.png", file_size=42, is_private=0)
+
+		policy = self._policy()
+		# The temporary object stays private, also for a public file.
+		self.assertEqual(policy["Fields"], {"Content-Type": "image/png"})
+		self.assertIn(["content-length-range", 42, 42], policy["Conditions"])
+		self.assertIn({"Content-Type": "image/png"}, policy["Conditions"])
+
+	def test_upload_complete_makes_public_file_public(self):
+		token = controller.upload_start(file_name="a.png", file_size=3, is_private=0)["token"]
+		self.mock_s3_client.head_object.return_value = {"ContentLength": 3}
+		controller.upload_complete(token)
+		self.assertEqual(self.mock_s3_client.copy.call_args.kwargs["ExtraArgs"], {"ACL": "public-read"})
+
+	def test_upload_complete_rejects_token_of_other_user(self):
+		token = controller.upload_start(file_name="a.txt", file_size=1)["token"]
+		_ensure_perm_test_user()
+		frappe.set_user(_PERM_TEST_USER)
+		with self.assertRaises(frappe.PermissionError):
+			controller.upload_complete(token)
+		self.mock_s3_client.head_object.assert_not_called()
+
+	def test_upload_complete_creates_file_with_key(self):
+		todo = frappe.get_doc({"doctype": "ToDo", "description": "direct upload"}).insert()
+		token = controller.upload_start(
+			file_name="a.txt", file_size=3, doctype="ToDo", docname=todo.name, fieldname="description"
+		)["token"]
+		self.mock_s3_client.head_object.return_value = {"ContentLength": 3}
+
+		file_doc = controller.upload_complete(token)
+
+		upload_key = self.mock_s3_client.generate_presigned_post.call_args.args[1]
+		key = file_doc.s3_object_key
+		self.assertTrue(upload_key.startswith(controller.DIRECT_UPLOAD_KEY_PREFIX))
+		self.assertNotIn(key, upload_key)
+		self.mock_s3_client.head_object.assert_called_once_with(Bucket="test-bucket", Key=upload_key)
+		self.mock_s3_client.copy.assert_called_once_with(
+			{"Bucket": "test-bucket", "Key": upload_key}, "test-bucket", key, ExtraArgs={}
+		)
+		self.mock_s3_client.delete_object.assert_called_once_with(Bucket="test-bucket", Key=upload_key)
+		row = frappe.db.get_value(
+			"File",
+			file_doc.name,
+			["s3_object_key", "file_url", "attached_to_name", "is_private"],
+			as_dict=True,
+		)
+		self.assertEqual(row.s3_object_key, key)
+		self.assertEqual(row.file_url, controller.S3Operations().get_file_url(key, 1))
+		self.assertEqual(row.attached_to_name, todo.name)
+		self.assertEqual(row.is_private, 1)
+
+	def test_upload_complete_logs_failed_delete_of_temporary_object(self):
+		token = controller.upload_start(file_name="a.txt", file_size=3)["token"]
+		self.mock_s3_client.head_object.return_value = {"ContentLength": 3}
+		self.mock_s3_client.delete_object.side_effect = ClientError(
+			{"Error": {"Code": "AccessDenied"}}, "DeleteObject"
+		)
+
+		with patch("frappe_s3_attachment.controller.frappe.log_error") as log_error:
+			file_doc = controller.upload_complete(token)
+
+		self.assertTrue(frappe.db.exists("File", file_doc.name))
+		log_error.assert_called_once()
