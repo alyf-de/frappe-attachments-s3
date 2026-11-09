@@ -185,10 +185,24 @@ jobs:
             1. Create a branch `claude/issue-${{ github.event.issue.number }}` from the default branch.
             2. Reproduce the bug with a failing test first. For features, add a test for the new behavior.
             3. Make the smallest change that resolves the issue. Match the style of the surrounding code.
-            4. Run the full test suite. All tests must pass.
-            5. Commit with a conventional commit message (e.g. `fix: ...`), push the branch, and open a PR
-               with `gh pr create`. The PR body must contain `Closes #${{ github.event.issue.number }}`
-               and a short summary of the cause and the fix.
+            4. Run the full test suite. All tests must pass. Commit with a conventional commit message
+               (e.g. `fix: ...`). Don't push yet.
+            5. Get a review from a fresh subagent: the Agent tool with `subagent_type: "general-purpose"`.
+               Give it only the issue summary and this prompt, not your own reasoning:
+
+               > Load the `frappe-code-review` skill and review
+               > `git diff origin/${{ github.event.repository.default_branch }}...HEAD`.
+               > The change is meant to resolve this issue: <symptom and expected behavior, one or two sentences>.
+               > Judge whether it fixes the cause or only hides the symptom, whether the tests prove it,
+               > and the skill's checklist. Report only findings worth acting on, most serious first:
+               > file and line, what breaks and for whom, the fix. If nothing is worth acting on, say so
+               > in one line. Don't edit files.
+
+               Fix the findings you agree with in new commits and run the tests again. If the fixes change
+               behavior, get one more review from a new subagent. Stop after that second review.
+            6. Push the branch and open a PR with `gh pr create`. The PR body must contain
+               `Closes #${{ github.event.issue.number }}`, a short summary of the cause and the fix,
+               and the review outcome: findings fixed, and findings rejected with the reason.
 
             If you can't resolve the issue, don't open a PR. Explain why with `gh issue comment`.
 
